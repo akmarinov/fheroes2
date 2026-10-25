@@ -1196,6 +1196,13 @@ namespace
 #endif
 
             uint32_t flags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE;
+
+#if defined( __EMSCRIPTEN__ )
+            // The browser reports the size of the canvas in CSS pixels, which are not the physical pixels of the display. Requesting
+            // the high DPI surface makes the port allocate a back buffer matching the real resolution of the screen so that the scaling
+            // of the game image is performed by the GPU instead of being stretched by the browser afterwards.
+            flags |= SDL_WINDOW_ALLOW_HIGHDPI;
+#endif
             if ( isFullScreen ) {
 #if defined( _WIN32 )
                 // We force fullscreen at desktop resolution for nearest scaling to disable hardware scaling of game resolution by the monitor.

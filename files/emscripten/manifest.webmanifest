@@ -1,0 +1,34 @@
+{
+  "name": "fheroes2 - Heroes of Might and Magic II",
+  "short_name": "fheroes2",
+  "description": "A recreation of the Heroes of Might and Magic II engine, running as WebAssembly in the browser.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#171310",
+  "theme_color": "#171310",
+  "categories": [
+    "games"
+  ],
+  "icons": [
+    {
+      "src": "./icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

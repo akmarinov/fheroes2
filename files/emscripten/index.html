@@ -1,210 +1,1140 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
+  <meta charset="utf-8">
   <title>fheroes2</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Roboto:ital,wght@0,100;0,300;0,400;0,500;0,700;0,900;1,100;1,300;1,400;1,500;1,700;1,900&display=swap" rel="stylesheet">
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/progress.js/0.1.0/progress.min.js" integrity="sha512-CklrzCqwODBOEJHJq73SZrgWC7xcxssgg5M1xokosfDDz2/nLTCuMDyc51gbJtb8DriV4EYjJSlklPH5Ejn9XA==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/progress.js/0.1.0/progressjs.min.css" integrity="sha512-ovRFHsWpnYUBNZd/8CmbaWAKBDO8xb0l5Y8PdIae1O5RXO2QyU3CZGNzuYuE0CQHKazIzWMQpnTn26WpPjexfw==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+  <meta name="viewport" content="width=device-width, height=device-height, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#171310">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="fheroes2">
+  <meta name="description" content="A recreation of the Heroes of Might and Magic II engine, running as WebAssembly in the browser.">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png">
+  <link rel="apple-touch-icon" href="./icons/icon-180.png">
   <style>
-      body { margin: 0; height: 0; font-family: "Roboto", serif;}
-      #canvas {
-          height: 100vh;
-          width: 100vw;
-          display: block;
-          margin: 0 auto;
-          background: url(./fheroes2.jpeg) center center;
-          background-size: cover;
-          position: absolute;
-          z-index: 10;
-      }
-      #uploader, #launcher {
-          z-index: 100;
-          position: absolute;
-          color: #fff;
-          font-size: 30px;
-          -webkit-text-stroke: 1px #000;
-          height: 100vh;
-          width: 100vw;
-      }
-      #launcher {
-          display: none;
-          -webkit-text-stroke: 1px #fff;
-      }
-      #uploader input[type=file] {
-          display: none
-      }
-      #uploader label {
-          text-align: center;
-          display: block;
-          cursor: pointer;
-          height: 100vh;
-          width: 100vw;
-          position: absolute;
-      }
-      #uploader label span {
-          padding: 10vh 0 0 0;
-          display: block;
-      }
-      #launcher button {
-          font-size: 30px;
-      }
-      #launcher .buttons {
-          text-align: center;
-          padding: 10vh 0 0 0;
-      }
+    :root {
+      color-scheme: dark;
+      --background: #171310;
+      --panel: #241d18;
+      --border: #4a3d2e;
+      --foreground: #e8dcc8;
+      --accent: #c8a24a;
+      --danger: #ff9d8a;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      /* Without this a two-finger gesture drags the whole page around on iOS. */
+      overscroll-behavior: none;
+      background: var(--background);
+      color: var(--foreground);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Ubuntu, Cantarell, sans-serif;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    body {
+      /* Keeps the game clear of the notch and of the home indicator when installed. */
+      padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    }
+
+    #stage {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    #canvas {
+      display: block;
+      /* The game handles every gesture itself, so the browser must not intercept any of them. */
+      touch-action: none;
+      -webkit-user-select: none;
+      user-select: none;
+      background: #000 url(./fheroes2.jpeg) center center / contain no-repeat;
+    }
+
+    .overlay {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 0.9rem;
+      padding: 1.5rem;
+      text-align: center;
+      background: radial-gradient(circle at 50% 30%, #2b2219 0%, var(--background) 78%);
+      overflow: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    .overlay[hidden] {
+      display: none;
+    }
+
+    .overlay h1 {
+      margin: 0;
+      font-size: 1.35rem;
+      letter-spacing: 0.1em;
+      color: var(--accent);
+    }
+
+    .overlay p {
+      margin: 0;
+      max-width: 44rem;
+      line-height: 1.5;
+      font-size: 0.95rem;
+      opacity: 0.88;
+    }
+
+    .buttons {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.6rem;
+      justify-content: center;
+    }
+
+    button,
+    .button {
+      appearance: none;
+      -webkit-appearance: none;
+      font: inherit;
+      font-size: 1rem;
+      color: var(--foreground);
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 0.4rem;
+      padding: 0.7rem 1.15rem;
+      min-height: 44px;
+      cursor: pointer;
+    }
+
+    button:active,
+    .button:active {
+      border-color: var(--accent);
+    }
+
+    button[disabled],
+    .button[aria-disabled=true] {
+      opacity: 0.45;
+      cursor: default;
+    }
+
+    input[type=file] {
+      /* The pickers are driven by the labels above, the widgets themselves stay out of the way. */
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .track {
+      width: min(30rem, 82vw);
+      height: 10px;
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      overflow: hidden;
+      background: #000;
+    }
+
+    .track[hidden] {
+      display: none;
+    }
+
+    .track span {
+      display: block;
+      width: 0%;
+      height: 100%;
+      background: var(--accent);
+      transition: width 0.12s linear;
+    }
+
+    .status {
+      font-size: 0.85rem;
+      font-variant-numeric: tabular-nums;
+      min-height: 1.2em;
+    }
+
+    .error {
+      color: var(--danger);
+      white-space: pre-wrap;
+      text-align: left;
+      font-size: 0.85rem;
+      max-width: 44rem;
+    }
+
+    .error:empty {
+      display: none;
+    }
+
+    .hint {
+      font-size: 0.8rem;
+      opacity: 0.66;
+    }
+
+    [hidden] {
+      display: none !important;
+    }
   </style>
 </head>
+
 <body>
-<canvas id="canvas" width="640" height="400"></canvas>
-<div id="uploader">
-  <label>
-    <span>Click to select your Heroes 2 folder</span>
-    <input
-        type="file"
-        directory="directory"
-        multiple
-        webkitdirectory="webkitdirectory"
-        id="files"
-    />
-  </label>
-</div>
-<div id="launcher">
-  <div class="buttons">
-    <button onclick="Module.startGame()">Start game</button>
-    <button onclick="Module.deleteFiles()">Delete files</button>
+  <div id="stage">
+    <canvas id="canvas" width="640" height="480" tabindex="-1"></canvas>
+    <div id="gate" class="overlay">
+      <h1>HEROES OF MIGHT AND MAGIC II</h1>
+      <p>This is the <b>fheroes2</b> engine compiled to WebAssembly. It reproduces the original game and
+        needs its resource files to run: <b>data/HEROES2.AGG</b> for the base game, and additionally
+        <b>data/HEROES2X.AGG</b> for The Price of Loyalty or the Restoration of Erathia expansion.</p>
+      <p class="hint">The files are kept on this device only, and only have to be provided once. A ZIP
+        archive of the game folder is the quickest way to import them.</p>
+      <div class="buttons">
+        <label class="button" for="zip-input">Select a ZIP archive</label>
+        <input id="zip-input" type="file" accept=".zip,application/zip,application/x-zip-compressed">
+        <label class="button" id="folder-label" for="folder-input" hidden>Select a folder</label>
+        <input id="folder-input" type="file" webkitdirectory multiple hidden>
+        <label class="button" for="files-input">Select files</label>
+        <input id="files-input" type="file" multiple>
+        <button id="play-button" type="button" hidden>Play</button>
+        <button id="forget-button" type="button" hidden>Forget files</button>
+      </div>
+      <div id="gate-track" class="track" hidden><span></span></div>
+      <div id="gate-status" class="status"></div>
+      <div id="gate-error" class="error"></div>
+      <p id="install-hint" class="hint">Add this page to the home screen to play fullscreen.</p>
+    </div>
+
+    <div id="booting" class="overlay" hidden>
+      <h1>STARTING</h1>
+      <div id="boot-track" class="track" hidden><span></span></div>
+      <div id="boot-status" class="status"></div>
+      <div id="boot-error" class="error"></div>
+    </div>
   </div>
-</div>
-<script>
-    const S_IFMT = 61440; /* 0x0170000 type of file */
-    const S_IFDIR = 16384;  /* 0x0040000 directory */
-    const progressBar = progressJs("#canvas").setOptions({
-        theme: 'blueOverlayRadiusWithPercentBar',
-        overlayMode: true,
-        considerTransition: true
-    });
-    const canvas = document.querySelector('canvas');
-    canvas.oncontextmenu = event => event.preventDefault();
-    Object.assign(globalThis, { Module: {
-            preRun: [
-                () => Object.assign(globalThis.ENV, {
-                    FHEROES2_DATA: `/fheroes2/data`,
-                    HOME: '/fheroes2'
-                }),
-                () => {
-                    addRunDependency('syncfs');
-                    FS.mkdir('/fheroes2');
-                    FS.mount(IDBFS, { root: '/' }, '/fheroes2');
-                    FS.syncfs(true, (err) => {
-                        if (err) throw err;
-                        try {
-                            if (Object.keys(FS.lookupPath(`${ENV.FHEROES2_DATA}`)).length === 0) return;
-                            document.querySelector('#uploader').style.display = 'none';
-                            document.querySelector('#launcher').style.display = 'block';
-                        }
-                        catch (ignore) {
-                            FS.mkdir(`${ENV.FHEROES2_DATA}`);
-                        }
-                    });
-                },
-                () => {
-                    document.querySelector('input[type=file]').addEventListener('input', e => {
-                        const files = [...e.target.files];
-                        const requiredFiles = ['data/HEROES2.AGG', 'data/HEROES2X.AGG']
-                        if (files.length === 1) return Module.clearInput('zip archives are not supported yet, sorry');
-                        if (files.length > 3000) return Module.clearInput('wrong directory, or your maps collection is really awesome.');
-                        const requiredResolved = files.filter(({ webkitRelativePath: path }) =>
-                            requiredFiles.some(rq => path.toLocaleLowerCase().endsWith(rq.toLocaleLowerCase()))).length === 2;
-                        if (!requiredResolved) return Module.clearInput('wrong directory');
-                        const whitListed = ['data', 'heroes2', 'maps', 'music'];
-                        files.filter(file => {
-                            const [fileName, ...path] = file.webkitRelativePath.split('/').reverse();
-                            if (fileName.startsWith('.')) return false;
-                            return path
-                                .map(folder => folder.toLocaleLowerCase())
-                                .some(folder => whitListed.includes(folder))
-                        }).reduce((uploaded, file, _ignore, queue) => {
-                            const [fileName, ...path] = file.webkitRelativePath.split('/').reverse();
-                            const [ignore, ...relativePath] = path.reverse();
-                            Module.mkdirWithParents(`${ENV.FHEROES2_DATA}/${relativePath.join('/')}`);
 
-                            const reader = new FileReader();
-                            reader.addEventListener('error', console.error);
-                            reader.addEventListener('loadend', ({ target: { result } }) => {
-                                FS.writeFile(`${ENV.FHEROES2_DATA}/${relativePath.join('/')}/${fileName}`, new Uint8Array(result), {
-                                    encoding: 'binary'
-                                });
-                                uploaded.push(file);
-                                if (uploaded.length === queue.length) {
-                                    FS.syncfs(false, err => {
-                                        if (err) return Module.clearInput('Failed to sync FS');
-                                        document.querySelector('#uploader').style.display = 'none';
-                                        document.querySelector('#launcher').style.display = 'block';
-                                    })
-                                }
-                            });
-                            reader.readAsArrayBuffer(file);
-                            return uploaded;
-                        }, []);
-                    })
-                }
-            ],
-            clearInput: (msg = '') => {
-                document.querySelector('input[type=file]').value = null;
-                msg && alert(msg);
-            },
-            mkdirWithParents: path => {
-                const parts = path.split('/');
-                try { FS.lookupPath(parts.join('/')) }
-                catch (ignore) {
-                    parts.reduce((p, part) => {
-                        p = [...p, part];
-                        if (!part) return p;
-                        try { FS.lookupPath(p.join('/')) }
-                        catch (ignore) { FS.mkdir(p.join('/')) }
-                        return p;
-                    }, []);
-                }
-            },
-            clearPath: path => {
-                try {
-                    Object.keys(FS.lookupPath(path).node.contents).forEach(node =>
-                        (FS.stat(`${path}/${node}`).mode & S_IFMT) === S_IFDIR
-                            ? Module.clearPath(`${path}/${node}`)
-                            : FS.unlink(`${path}/${node}`));
-                    FS.rmdir(`${path}`)
-                } catch (ignore) {}
-            },
-            startGame: () => {
-                removeRunDependency('syncfs');
-                document.querySelector('#uploader').style.display = 'none';
-                document.querySelector('#launcher').style.display = 'none';
-            },
-            deleteFiles: () => {
-                if (false === confirm('Are you sure?')) return;
-                Module.clearPath(ENV.FHEROES2_DATA);
-                FS.syncfs(false, ignore => {});
-                Module.clearInput();
-                document.querySelector('#uploader').style.display = 'block';
-                document.querySelector('#launcher').style.display = 'none';
-            },
-            setStatus: status => {
-                const dlProgressRE = /(?<progress>\d+)\/(?<total>\d+)/ig;
-                if (!status || !dlProgressRE.test(status)) {
-                    if ((status ?? '').startsWith('Downloading data')) progressBar.start();
-                    return;
-                }
-                dlProgressRE.lastIndex = 0;
-                const {groups: {progress, total}} = [...status.matchAll(dlProgressRE)][0];
-                const done = Math.round(progress / total * 100);
-                progressBar.set(done);
-                if (100 === done) progressBar.end();
-            },
-            canvas
+  <script>
+    "use strict";
+
+    /*
+     * The runtime is loaded by hand once the game files are available, because the engine refuses to do
+     * anything useful without them. The build limits the incoming Module API to `canvas`, `preRun` and
+     * `setStatus`, so the boot is coordinated through the run dependency mechanism only.
+     *
+     * Imported files are never written straight into the emscripten file system: they are stored as
+     * blobs in their own IndexedDB store and copied into memory at every start. Two reasons: the engine
+     * flushes its whole file system to IndexedDB after each saved game, so several hundred megabytes of
+     * resources must not live in the mounted subtree; and handing a 40 MB file to iOS as a single write
+     * is exactly the kind of allocation that gets a tab killed.
+     */
+
+    const canvas = document.getElementById("canvas");
+    const stage = document.getElementById("stage");
+
+    const gate = document.getElementById("gate");
+    const booting = document.getElementById("booting");
+
+    const gateTrack = document.getElementById("gate-track");
+    const gateBar = gateTrack.firstElementChild;
+    const gateStatus = document.getElementById("gate-status");
+    const gateError = document.getElementById("gate-error");
+
+    const bootTrack = document.getElementById("boot-track");
+    const bootBar = bootTrack.firstElementChild;
+    const bootStatus = document.getElementById("boot-status");
+    const bootError = document.getElementById("boot-error");
+
+    const zipInput = document.getElementById("zip-input");
+    const folderInput = document.getElementById("folder-input");
+    const folderLabel = document.getElementById("folder-label");
+    const filesInput = document.getElementById("files-input");
+    const playButton = document.getElementById("play-button");
+    const forgetButton = document.getElementById("forget-button");
+    const installHint = document.getElementById("install-hint");
+
+    /*
+     * The engine looks up `data/*.agg`, `maps/*`, `music/*` and `anim/*` below every root directory, and
+     * the FHEROES2_DATA environment variable registers one. This root is deliberately a plain memory
+     * mount, see the note above.
+     */
+    const DATA_ROOT = "/data";
+
+    // Configuration and saved games live under HOME, the subtree that is mounted on IndexedDB.
+    const HOME_ROOT = "/fheroes2";
+
+    // Reading a resource in one gulp would duplicate a 40 MB video in the JavaScript heap.
+    const CHUNK_SIZE = 4 * 1024 * 1024;
+
+    // Only these subtrees matter; the rest of a game folder is optional at runtime and can be huge.
+    const RELEVANT_PREFIXES = ["data/", "maps/", "music/", "anim/", "anim2/", "heroes2/"];
+
+    // The demo release ships a data folder without the aggregate file, so the check cannot be skipped.
+    const MANDATORY = ["data/heroes2.agg"];
+
+    const ASSET_DB = "fheroes2-assets";
+    const ASSET_STORE = "files";
+
+    let store = null;
+    let busy = false;
+
+    /* ---------------------------------------------------------------------- *
+     * Presentation
+     * ---------------------------------------------------------------------- */
+
+    function paint(track, bar, fraction) {
+      track.hidden = !(fraction >= 0);
+      bar.style.width = `${Math.round(Math.max(0, Math.min(1, fraction)) * 100)}%`;
+    }
+
+    function fail(message) {
+      gate.hidden = false;
+      booting.hidden = true;
+      paint(gateTrack, gateBar, -1);
+      gateStatus.textContent = "";
+      gateError.textContent = message;
+      enablePickers(true);
+    }
+
+    function enablePickers(enabled) {
+      for (const input of [zipInput, folderInput, filesInput, playButton, forgetButton]) {
+        input.disabled = !enabled;
+      }
+
+      // A label does not honour the disabled attribute, so it has to be taken out of the flow itself.
+      for (const label of document.querySelectorAll("label.button")) {
+        label.setAttribute("aria-disabled", String(!enabled));
+      }
+
+      busy = !enabled;
+    }
+
+    /* ---------------------------------------------------------------------- *
+     * Layout
+     * ---------------------------------------------------------------------- */
+
+    /*
+     * SDL renders the game with a logical size and letterboxes the image when the canvas has another
+     * aspect ratio. Mouse coordinates are converted through that letterbox, touch coordinates are not:
+     * they are normalized against the canvas box and multiplied by the game resolution. Any mismatch
+     * therefore makes the emulated pointer land beside the finger, so the box always matches the image.
+     */
+    let gameAspect = canvas.width / canvas.height;
+    let appliedSize = "";
+
+    function fitCanvas() {
+      const box = stage.getBoundingClientRect();
+
+      // A collapsed stage means the page is not visible; resizing then would destroy the surface.
+      if (box.width < 16 || box.height < 16) {
+        return;
+      }
+
+      let width = box.width;
+      let height = width / gameAspect;
+
+      if (height > box.height) {
+        height = box.height;
+        width = height * gameAspect;
+      }
+
+      width = Math.floor(width);
+      height = Math.floor(height);
+
+      const key = `${width}x${height}`;
+      if (key === appliedSize) {
+        return;
+      }
+      appliedSize = key;
+
+      canvas.style.width = `${width}px`;
+      canvas.style.height = `${height}px`;
+    }
+
+    function followCanvasResolution() {
+      // The engine rewrites the size of the drawing surface whenever the resolution changes in its
+      // options dialog, and the CSS box has to follow it.
+      const sync = () => {
+        if (canvas.width < 2 || canvas.height < 2) {
+          return;
         }
+
+        const aspect = canvas.width / canvas.height;
+        if (Math.abs(aspect - gameAspect) > 1e-3) {
+          gameAspect = aspect;
+          appliedSize = "";
+          fitCanvas();
+        }
+      };
+
+      if ("ResizeObserver" in window) {
+        new ResizeObserver(sync).observe(canvas);
+      }
+      else {
+        setInterval(sync, 250);
+      }
+
+      for (const event of ["resize", "orientationchange"]) {
+        window.addEventListener(event, () => {
+          appliedSize = "";
+          fitCanvas();
+        });
+      }
+
+      document.addEventListener("visibilitychange", () => {
+        if (!document.hidden) {
+          appliedSize = "";
+          fitCanvas();
+        }
+      });
+
+      fitCanvas();
+    }
+
+    /* ---------------------------------------------------------------------- *
+     * Asset store
+     * ---------------------------------------------------------------------- */
+
+    function openStore() {
+      if (store) {
+        return Promise.resolve(store);
+      }
+
+      return new Promise((resolve, reject) => {
+        const request = indexedDB.open(ASSET_DB, 1);
+
+        request.onupgradeneeded = () => {
+          const database = request.result;
+
+          if (!database.objectStoreNames.contains(ASSET_STORE)) {
+            database.createObjectStore(ASSET_STORE);
+          }
+        };
+        request.onsuccess = () => {
+          store = request.result;
+          resolve(store);
+        };
+        request.onerror = () => reject(request.error);
+        request.onblocked = () => reject(new Error("IndexedDB is blocked by another tab."));
+      });
+    }
+
+    async function withStore(mode, work) {
+      const database = await openStore();
+
+      return new Promise((resolve, reject) => {
+        const transaction = database.transaction(ASSET_STORE, mode);
+
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => reject(transaction.error);
+        transaction.onabort = () => reject(transaction.error);
+
+        work(transaction.objectStore(ASSET_STORE), resolve, reject);
+      });
+    }
+
+    function putAsset(path, blob) {
+      return withStore("readwrite", objectStore => {
+        objectStore.put(blob, path);
+      });
+    }
+
+    async function listAssets() {
+      const database = await openStore();
+
+      return new Promise((resolve, reject) => {
+        const transaction = database.transaction(ASSET_STORE, "readonly");
+        const request = transaction.objectStore(ASSET_STORE).getAllKeys();
+
+        request.onsuccess = () => resolve(request.result.map(String).sort());
+        request.onerror = () => reject(request.error);
+      });
+    }
+
+    function readAsset(path) {
+      const database = openStore();
+
+      return database.then(loaded => new Promise((resolve, reject) => {
+        const request = loaded.transaction(ASSET_STORE, "readonly").objectStore(ASSET_STORE).get(path);
+
+        request.onsuccess = () => resolve(request.result || null);
+        request.onerror = () => reject(request.error);
+      }));
+    }
+
+    function clearAssets() {
+      return withStore("readwrite", objectStore => {
+        objectStore.clear();
+      });
+    }
+
+    /* ---------------------------------------------------------------------- *
+     * Paths
+     * ---------------------------------------------------------------------- */
+
+    function normalizePath(name) {
+      return name.replace(/^\.?\//, "").replace(/\\/g, "/").replace(/\/{2,}/g, "/").toLowerCase();
+    }
+
+    function isRelevant(path) {
+      return RELEVANT_PREFIXES.some(prefix => path.startsWith(prefix)) && !path.endsWith("/");
+    }
+
+    /*
+     * Picking files one by one, which is the only multi-file option iOS offers before 18.4, hands over
+     * bare names: whatever folder a file came from is lost. Game files are grouped by extension, so
+     * they can be put back where the engine looks for them. Names that still carry a folder are left
+     * alone, and unknown extensions are dropped by the filter above rather than filed somewhere wrong.
+     */
+    const LOOSE_DESTINATIONS = [
+      { extension: ".agg", directory: "data/" },
+      { extension: ".h2c", directory: "data/" },
+      { extension: ".h2d", directory: "data/" },
+      { extension: ".mp2", directory: "maps/" },
+      { extension: ".smk", directory: "anim/" },
+      { extension: ".ogg", directory: "music/" },
+      { extension: ".mp3", directory: "music/" },
+      { extension: ".flac", directory: "music/" }
+    ];
+
+    function homeLoosePath(path) {
+      if (path.includes("/")) {
+        return path;
+      }
+
+      const destination = LOOSE_DESTINATIONS.find(item => path.endsWith(item.extension));
+
+      return destination ? destination.directory + path : path;
+    }
+
+    /*
+     * A folder or an archive usually carries one common top level: either the picked folder itself, or
+     * the data directory of the game. The former has to go, the latter is part of the layout the engine
+     * expects, so a level is only removed when what remains of the paths still looks like game data.
+     */
+    function commonRoot(paths) {
+      const cut = paths[0].indexOf("/");
+
+      if (cut <= 0) {
+        return "";
+      }
+
+      const root = paths[0].slice(0, cut + 1);
+
+      if (!paths.every(path => path.startsWith(root))) {
+        return "";
+      }
+
+      return paths.some(path => isRelevant(path.slice(root.length))) ? root : "";
+    }
+
+    function requireMandatory(paths) {
+      const known = new Set(paths);
+      const missing = MANDATORY.filter(path => !known.has(path));
+
+      if (missing.length > 0) {
+        throw new Error(
+          "The selection does not contain data/HEROES2.AGG, which the game cannot run without. Select the data folder of the game, or an archive of the whole game folder."
+        );
+      }
+    }
+
+    /* ---------------------------------------------------------------------- *
+     * Import: plain files and folders
+     * ---------------------------------------------------------------------- */
+
+    async function importLooseFiles(files) {
+      const named = files.map(item => ({ path: homeLoosePath(normalizePath(item.name)), blob: item.blob }));
+      const relevant = named.filter(item => isRelevant(item.path));
+
+      if (relevant.length === 0) {
+        throw new Error("None of the selected files belongs to the game. Pick the contents of the game folder, or a ZIP archive of it.");
+      }
+
+      const root = commonRoot(relevant.map(item => item.path));
+      const entries = relevant.map(item => ({ path: root ? item.path.slice(root.length) : item.path, blob: item.blob }));
+
+      requireMandatory(entries.map(item => item.path));
+
+      let done = 0;
+
+      for (const entry of entries) {
+        await putAsset(entry.path, entry.blob);
+        paint(gateTrack, gateBar, ++done / entries.length);
+      }
+
+      return entries.length;
+    }
+
+    /* ---------------------------------------------------------------------- *
+     * Import: ZIP archive
+     * ---------------------------------------------------------------------- */
+
+    const END_OF_CENTRAL_DIRECTORY = 0x06054b50;
+    const ZIP64_END = 0x06064b50;
+    const ZIP64_LOCATOR = 0x07064b50;
+    const CENTRAL_MAGIC = 0x02014b50;
+    const LOCAL_MAGIC = 0x04034b50;
+
+    async function view(archive, offset, length) {
+      return new DataView(await archive.slice(offset, offset + length).arrayBuffer());
+    }
+
+    async function readCentralDirectory(archive) {
+      // The trailing record is at most 64 KB long because of its comment, and is searched backwards.
+      const size = Math.min(archive.size, 65557);
+      const tail = await view(archive, archive.size - size, size);
+
+      let end = -1;
+      for (let offset = tail.byteLength - 22; offset >= 0; --offset) {
+        if (tail.getUint32(offset, true) === END_OF_CENTRAL_DIRECTORY) {
+          end = offset;
+          break;
+        }
+      }
+
+      if (end < 0) {
+        throw new Error("The selected file is not a ZIP archive.");
+      }
+
+      let count = tail.getUint16(end + 10, true);
+      let offset = tail.getUint32(end + 16, true);
+
+      // Archives overflowing the 16 and 32 bit fields keep the real values in a ZIP64 record.
+      if (count === 0xffff || offset === 0xffffffff) {
+        let locator = -1;
+        for (let probe = end - 20; probe >= 0; --probe) {
+          if (tail.getUint32(probe, true) === ZIP64_LOCATOR) {
+            locator = probe;
+            break;
+          }
+        }
+
+        if (locator < 0) {
+          throw new Error("The ZIP64 locator of this archive cannot be found.");
+        }
+
+        const zip64Offset = Number(tail.getBigUint64(locator + 8, true));
+        const zip64 = await view(archive, zip64Offset, 56);
+
+        if (zip64.byteLength < 56 || zip64.getUint32(0, true) !== ZIP64_END) {
+          throw new Error("The ZIP64 record of this archive is malformed.");
+        }
+
+        count = Number(zip64.getBigUint64(32, true));
+        offset = Number(zip64.getBigUint64(48, true));
+      }
+
+      if (offset >= archive.size) {
+        throw new Error("The central directory of this archive points outside of the file.");
+      }
+
+      const directory = await view(archive, offset, Math.min(archive.size - offset, count * 46 + 4096 + totalNameGuess(count)));
+      const entries = [];
+      let cursor = 0;
+
+      for (let index = 0; index < count && cursor + 46 <= directory.byteLength; ++index) {
+        if (directory.getUint32(cursor, true) !== CENTRAL_MAGIC) {
+          break;
+        }
+
+        const flags = directory.getUint16(cursor + 8, true);
+        const method = directory.getUint16(cursor + 10, true);
+        let compressedSize = directory.getUint32(cursor + 20, true);
+        let uncompressedSize = directory.getUint32(cursor + 24, true);
+        const nameLength = directory.getUint16(cursor + 28, true);
+        const extraLength = directory.getUint16(cursor + 30, true);
+        const commentLength = directory.getUint16(cursor + 32, true);
+        let localOffset = directory.getUint32(cursor + 42, true);
+
+        const name = new TextDecoder().decode(new Uint8Array(directory.buffer, directory.byteOffset + cursor + 46, nameLength));
+
+        // Sizes and offsets beyond 4 GB live in the extra field of the entry.
+        if (compressedSize === 0xffffffff || uncompressedSize === 0xffffffff || localOffset === 0xffffffff) {
+          let extra = cursor + 46 + nameLength;
+          const limit = Math.min(extra + extraLength, directory.byteLength - 4);
+
+          while (extra + 4 <= limit) {
+            const header = directory.getUint16(extra, true);
+            const width = directory.getUint16(extra + 2, true);
+
+            if (header === 0x0001 && width >= 24 && extra + 28 <= directory.byteLength) {
+              if (uncompressedSize === 0xffffffff) {
+                uncompressedSize = Number(directory.getBigUint64(extra + 4, true));
+              }
+              if (compressedSize === 0xffffffff) {
+                compressedSize = Number(directory.getBigUint64(extra + 12, true));
+              }
+              if (localOffset === 0xffffffff) {
+                localOffset = Number(directory.getBigUint64(extra + 20, true));
+              }
+              break;
+            }
+
+            extra += 4 + width;
+          }
+        }
+
+        if ((flags & 0x1) !== 0) {
+          throw new Error(`The entry ${name} is encrypted, which is not supported.`);
+        }
+
+        if ((flags & 0x8) !== 0 && compressedSize === 0) {
+          throw new Error(`The entry ${name} was written without a size, which cannot be handled.`);
+        }
+
+        if (!name.endsWith("/") && compressedSize > 0) {
+          entries.push({ name, method, compressedSize, uncompressedSize, localOffset });
+        }
+
+        cursor += 46 + nameLength + extraLength + commentLength;
+      }
+
+      if (entries.length === 0) {
+        throw new Error("The archive does not contain any readable entry.");
+      }
+
+      return entries;
+    }
+
+    // The central directory records are variable length; this is a generous upper bound that keeps a
+    // single read of the tail instead of one read per entry.
+    function totalNameGuess(count) {
+      return Math.min(count * 400, 32 * 1024 * 1024);
+    }
+
+    async function localHeaderLength(archive, offset) {
+      const header = await view(archive, offset, 30);
+
+      if (header.byteLength < 30 || header.getUint32(0, true) !== LOCAL_MAGIC) {
+        throw new Error("A local file header of the archive is malformed.");
+      }
+
+      return 30 + header.getUint16(26, true) + header.getUint16(28, true);
+    }
+
+    // Stored and deflated are the only methods an archiver uses for game data. Anything else, notably
+    // the bzip2 or zstd variants, is rejected rather than silently producing unusable resources.
+    async function inflate(payload, method, expectedSize) {
+      if (method === 0) {
+        return payload;
+      }
+
+      if (method !== 8) {
+        throw new Error(`The compression method ${method} is not supported.`);
+      }
+
+      let stream;
+
+      try {
+        stream = payload.stream().pipeThrough(new DecompressionStream("deflate-raw"));
+      }
+      catch (unsupported) {
+        throw new Error("This browser cannot unpack ZIP archives. Use the file picker instead.");
+      }
+
+      const reader = stream.getReader();
+      const chunks = [];
+      let total = 0;
+
+      for (;;) {
+        const next = await reader.read();
+
+        if (next.done) {
+          break;
+        }
+
+        chunks.push(next.value);
+        total += next.value.byteLength;
+
+        // A corrupt or hostile archive must not be able to exhaust the memory of the tab.
+        if (expectedSize > 0 && total > expectedSize + 16) {
+          await reader.cancel();
+          throw new Error("An entry of the archive is larger than its declared size.");
+        }
+      }
+
+      let blob;
+
+      // A stored entry of a deflated stream can be assembled without one contiguous copy.
+      if (chunks.length === 1) {
+        blob = new Blob([chunks[0]]);
+      }
+      else {
+        const merged = new Uint8Array(total);
+        let written = 0;
+
+        for (const chunk of chunks) {
+          merged.set(chunk, written);
+          written += chunk.byteLength;
+        }
+
+        blob = new Blob([merged]);
+      }
+
+      return blob;
+    }
+
+    async function importArchive(archive) {
+      const entries = await readCentralDirectory(archive);
+      const relevant = [];
+
+      for (const entry of entries) {
+        const path = homeLoosePath(normalizePath(entry.name));
+
+        if (isRelevant(path)) {
+          relevant.push({ ...entry, path });
+        }
+      }
+
+      if (relevant.length === 0) {
+        throw new Error("The archive holds none of the data, maps, music or animation folders of the game.");
+      }
+
+      const root = commonRoot(relevant.map(entry => entry.path));
+
+      requireMandatory(relevant.map(entry => (root ? entry.path.slice(root.length) : entry.path)));
+
+      let done = 0;
+
+      // Every entry is unpacked, stored and released on its own, so memory stays flat regardless of the
+      // size of the archive.
+      for (const entry of relevant) {
+        const path = root ? entry.path.slice(root.length) : entry.path;
+        const header = await localHeaderLength(archive, entry.localOffset);
+        const payload = archive.slice(entry.localOffset + header, entry.localOffset + header + entry.compressedSize);
+        const blob = await inflate(payload, entry.method, entry.uncompressedSize);
+
+        await putAsset(path, blob);
+        paint(gateTrack, gateBar, ++done / relevant.length);
+      }
+
+      return relevant.length;
+    }
+
+    /* ---------------------------------------------------------------------- *
+     * Boot
+     * ---------------------------------------------------------------------- */
+
+    let runtimeRequested = false;
+
+    function startRuntime() {
+      if (runtimeRequested) {
+        return;
+      }
+      runtimeRequested = true;
+
+      gate.hidden = true;
+      booting.hidden = false;
+      bootStatus.textContent = "Loading the engine";
+      paint(bootTrack, bootBar, -1);
+
+      // Browsers only let a page make noise after a gesture, and a WebAssembly application opens its
+      // audio device well after the click that started it. Creating the context here, inside the tap
+      // that launches the engine, and handing it to the port through the module object, is what makes
+      // the first note audible on iOS rather than silence until the next touch.
+      try {
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+
+        if (AudioContextClass) {
+          const context = new AudioContextClass();
+          const wake = () => {
+            if (context.state === "suspended") {
+              context.resume().catch(() => {});
+            }
+          };
+
+          wake();
+
+          // Handing the context over means the port no longer installs its own listeners for it, and a
+          // phone suspends an audio context whenever the tab is hidden, so the same waking has to be
+          // arranged here.
+          for (const event of ["pointerdown", "keydown", "touchstart"]) {
+            for (const target of [document, canvas]) {
+              target?.addEventListener(event, wake, { passive: true });
+            }
+          }
+
+          globalThis.Module.SDL2 = { audioContext: context };
+        }
+      }
+      catch (error) {
+        // Sound is a luxury; a browser that refuses to hand out an audio device still has to run the game.
+        console.warn("Audio is unavailable:", error);
+      }
+
+      // Loading the glue is what starts compilation and streaming of the wasm binary.
+      const script = document.createElement("script");
+
+      script.src = "./fheroes2.js";
+      document.head.append(script);
+    }
+
+    function makeDirectory(FS, target) {
+      const parts = target.split("/").filter(Boolean);
+      let path = "";
+
+      for (const part of parts) {
+        path += `/${part}`;
+        try {
+          FS.lookupPath(path);
+        }
+        catch (missing) {
+          FS.mkdir(path);
+        }
+      }
+    }
+
+    async function writeBlob(FS, target, blob) {
+      if (blob.size <= CHUNK_SIZE) {
+        FS.writeFile(target, new Uint8Array(await blob.arrayBuffer()));
+        return;
+      }
+
+      const handle = FS.open(target, "w", 0o644);
+
+      try {
+        let offset = 0;
+
+        while (offset < blob.size) {
+          const slice = blob.slice(offset, Math.min(offset + CHUNK_SIZE, blob.size));
+          const bytes = new Uint8Array(await slice.arrayBuffer());
+
+          FS.write(handle, bytes, 0, bytes.length, offset);
+          offset += bytes.length;
+        }
+      }
+      finally {
+        FS.close(handle);
+      }
+    }
+
+    Object.assign(globalThis, {
+      Module: {
+        canvas,
+        setStatus: status => {
+          const download = /(\d+)\/(\d+)/.exec(status || "");
+
+          if (download) {
+            paint(bootTrack, bootBar, Number(download[1]) / Number(download[2]));
+            bootStatus.textContent = "Downloading data";
+            return;
+          }
+
+          // The runtime reports an empty status once main() has been entered.
+          if (!status) {
+            booting.hidden = true;
+            paint(bootTrack, bootBar, -1);
+            return;
+          }
+
+          if (status !== "Running...") {
+            bootStatus.textContent = status;
+          }
+        },
+        preRun: [
+          () => {
+            // The glue keeps its internals at the top level of the classic script it is, which makes
+            // them globals, and also mirrors the ones the build exports onto the module object. Either
+            // spelling may be the one that survives the optimiser, so both are consulted.
+            const runtime = globalThis.Module || {};
+            const env = globalThis.ENV || runtime.ENV;
+
+            if (!env) {
+              throw new Error("The build does not expose the environment of the engine, so it would not find its data.");
+            }
+
+            Object.assign(env, { FHEROES2_DATA: DATA_ROOT, HOME: HOME_ROOT });
+          },
+          () => {
+            const runtime = globalThis.Module || {};
+            const fs = globalThis.FS || runtime.FS;
+            const idbfs = globalThis.IDBFS || runtime.IDBFS;
+            const begin = globalThis.addRunDependency || runtime.addRunDependency;
+            const finish = globalThis.removeRunDependency || runtime.removeRunDependency;
+
+            if (!fs || !idbfs) {
+              throw new Error("The build has no persistent storage support, so saved games would be lost.");
+            }
+
+            begin("game-files");
+
+            makeDirectory(fs, HOME_ROOT);
+            fs.mount(idbfs, { root: "/" }, HOME_ROOT);
+            makeDirectory(fs, DATA_ROOT);
+
+            (async () => {
+              await new Promise((resolve, reject) => {
+                fs.syncfs(true, error => (error ? reject(error) : resolve()));
+              });
+
+              const paths = await listAssets();
+
+              if (paths.length === 0) {
+                throw new Error("The stored game files have disappeared. Import them again.");
+              }
+
+              bootStatus.textContent = "Restoring game files";
+              paint(bootTrack, bootBar, 0);
+
+              let done = 0;
+
+              for (const path of paths) {
+                const blob = await readAsset(path);
+
+                if (!blob) {
+                  continue;
+                }
+
+                const target = `${DATA_ROOT}/${path}`;
+
+                makeDirectory(fs, target.slice(0, target.lastIndexOf("/")));
+                await writeBlob(fs, target, blob);
+
+                paint(bootTrack, bootBar, ++done / paths.length);
+              }
+
+              finish("game-files");
+            })().catch(error => {
+              console.error(error);
+              runtimeRequested = false;
+              booting.hidden = true;
+              fail(`${error && error.message ? error.message : error}`);
+            });
+          }
+        ]
+      }
     });
 
-    document.head.append(Object.assign(document.createElement('script'), {src: './fheroes2.js'}));
-</script>
+    /* ---------------------------------------------------------------------- *
+     * Gate
+     * ---------------------------------------------------------------------- */
+
+    async function importThenPlay(work) {
+      if (busy) {
+        return;
+      }
+
+      enablePickers(false);
+      paint(gateTrack, gateBar, 0);
+      gateError.textContent = "";
+      gateStatus.textContent = "Reading";
+
+      try {
+        const count = await work();
+
+        gateStatus.textContent = `${count} game files stored on this device`;
+        paint(gateTrack, gateBar, 1);
+        playButton.hidden = false;
+        forgetButton.hidden = false;
+
+        // Importing is a genuine user gesture, the best possible moment to launch the runtime.
+        setTimeout(startRuntime, 120);
+      }
+      catch (error) {
+        console.error(error);
+        fail(`${error && error.message ? error.message : error}`);
+      }
+    }
+
+    zipInput.addEventListener("change", () => {
+      const archive = zipInput.files && zipInput.files[0];
+
+      zipInput.value = "";
+      if (archive) {
+        gateStatus.textContent = "Unpacking";
+        importThenPlay(() => importArchive(archive));
+      }
+    });
+
+    folderInput.addEventListener("change", () => {
+      const files = [...folderInput.files].map(file => ({ name: file.webkitRelativePath || file.name, blob: file }));
+
+      folderInput.value = "";
+      if (files.length > 0) {
+        importThenPlay(() => importLooseFiles(files));
+      }
+    });
+
+    filesInput.addEventListener("change", () => {
+      const files = [...filesInput.files].map(file => ({ name: file.name, blob: file }));
+
+      filesInput.value = "";
+      if (files.length > 0) {
+        importThenPlay(() => importLooseFiles(files));
+      }
+    });
+
+    playButton.addEventListener("click", startRuntime);
+
+    forgetButton.addEventListener("click", async () => {
+      if (!window.confirm("Forget the imported game files? Saved games are kept.")) {
+        return;
+      }
+
+      try {
+        await clearAssets();
+        location.reload();
+      }
+      catch (error) {
+        fail(`${error && error.message ? error.message : error}`);
+      }
+    });
+
+    // Directory picks work on the desktop browsers and on iOS from 18.4 on; elsewhere the label would
+    // open a picker that silently returns a single folder's worth of nothing useful.
+    if ("webkitdirectory" in HTMLInputElement.prototype) {
+      folderInput.hidden = false;
+      folderLabel.hidden = false;
+    }
+
+    if (window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true) {
+      installHint.hidden = true;
+    }
+
+    // A service worker is what makes the game playable offline, and on iOS it is also the only way an
+    // installed web app is allowed to keep the engine cached for long. Registration is best effort: a
+    // build served without the worker, for instance from a file share, has to keep working.
+    const secured = location.protocol === "https:" || location.hostname === "localhost" || location.hostname === "127.0.0.1";
+
+    if ("serviceWorker" in navigator && secured) {
+      window.addEventListener("load", () => {
+        navigator.serviceWorker.register("./sw.js").catch(error => console.warn("Offline mode is unavailable:", error));
+      });
+    }
+
+    followCanvasResolution();
+    enablePickers(true);
+
+    (async () => {
+      try {
+        const paths = await listAssets();
+
+        requireMandatory(paths);
+
+        playButton.hidden = false;
+        forgetButton.hidden = false;
+        gateStatus.textContent = `${paths.length} game files stored on this device`;
+      }
+      catch (error) {
+        // No usable store just means the game has not been imported on this device yet.
+        console.warn(error);
+      }
+    })();
+  </script>
 </body>
+
+</html>

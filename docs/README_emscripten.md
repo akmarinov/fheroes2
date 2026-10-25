@@ -66,3 +66,80 @@ fheroes2.wasm.map (if fheroes2 has been built in debug mode)
 ```
 
 If you want to use the stock launcher (pretty basic at the moment), then you will also need to copy all the files from `files/emscripten` to the same directory.
+
+## Serving The Build
+
+The stock launcher keeps the game files of the player in the browser, so it can only run from an HTTP(S)
+origin: opening `index.html` from a file share does not work. For local testing,
+
+```sh
+script/pwa/build.sh        # assembles build/pwa, brotli and gzip copies included
+script/pwa/serve.py build/pwa --port 8080
+```
+
+The development server exists because a plain static server gets two things wrong: the wasm binary has to
+be served as `application/wasm` or the browser buffers and recompiles the whole file instead of streaming
+it, and a precompressed copy has to be announced through `Content-Encoding` or it is transferred as opaque
+bytes. The same applies to any other web server:
+
+* `.wasm` has to be labelled `application/wasm`.
+* `.webmanifest` has to be labelled `application/manifest+json`.
+* Serving the `.br` and `.gz` copies with the matching `Content-Encoding` and a `Vary: Accept-Encoding`
+  header takes the first load from roughly 22 MB down to about 9 MB, which is what makes the build
+  practical on a phone.
+* `sw.js` has to be served with `Cache-Control: no-cache`. A service worker that is not revalidated is
+  only updated once the browser gives up polling for it, which on iOS can take a day.
+
+`script/pwa/build.sh` names the cache of the service worker after a digest of the payload, so an updated
+site is picked up by itself while a rebuild of unchanged sources does not make anybody download anything
+again.
+
+Multithreading, and with it the `Cross-Origin-Opener-Policy` and `Cross-Origin-Embedder-Policy` headers
+described above, is only needed for a build with `FHEROES2_WITH_THREADS=ON`. The default build is single
+threaded and runs without those headers, which matters because COEP also blocks any cross origin resource
+that does not opt in.
+
+## Playing As An Installed Application
+
+The launcher asks for the game files once and keeps them on the device; nothing is uploaded anywhere.
+There are three ways of handing them over:
+
+* A ZIP archive of the game folder, or of the `data` folder. The archive is unpacked in the browser, entry
+  by entry, so the size of the archive is not limited by the memory of the tab. This works everywhere.
+* The `data` folder itself, where the browser supports picking a folder. iOS only offers this from 18.4
+  on; the option is hidden on older systems.
+* Individual files, which is also the fallback on any browser. The folder a picked file came from is lost,
+  so files are placed by their extension: `.agg`, `.h2c` and `.h2d` are treated as data, `.mp2` as a map,
+  `.smk` as a video and `.ogg`, `.mp3`, `.flac` as music.
+
+`data/HEROES2.AGG` is required; everything else is optional.
+
+Saved games, settings and downloaded content live in a second store that survives an update of the build
+and is only cleared by the Forget button, which removes the imported game files and nothing else.
+
+### Installing On An iPhone Or iPad
+
+The build is a progressive web app: serve it over HTTPS, open it in Safari, use the Share button and
+*Add to Home Screen*. Afterwards it starts without the browser interface, keeps the engine and the game
+files offline and is not fetched from the network on every launch.
+
+Things worth knowing about iOS:
+
+* The first start needs a download of a few megabytes; every later start is served from local storage.
+* The memory of a web page is capped. The build limits its linear memory to 1 GiB for that reason, which
+  is plenty: a game sitting at the main menu uses around 130 MB.
+* Sound starts with the tap that launches the engine. Browsers refuse to let a page make noise before a
+  gesture, and a WebAssembly application opens its audio device long after that tap, so the launcher
+  creates the audio context while the tap is still happening and hands it to the port.
+* Touch is used instead of a mouse where the game offers touch controls, and the on screen keyboard of the
+  game is used for typing, since a canvas cannot summon the keyboard of the system.
+* A phone may reclaim the memory of a backgrounded web app. Imported files and saved games are on disk and
+  survive that; an interrupted battle does not.
+
+### Notes For Other Browsers
+
+Desktop browsers, Android Chrome and Firefox work the same way; Chrome and Edge additionally offer their
+own install prompt. Only Safari needs the Apple specific meta tags and the *Add to Home Screen* gesture.
+
+The game needs a browser with WebAssembly, `Asyncify`, IndexedDB and, to accept a ZIP archive,
+`DecompressionStream`. Safari 16.4, Chrome 103 and Firefox 113 or later have all of them.

@@ -20,6 +20,11 @@
 
 TARGET := fheroes2.js
 
+# Maximum declarable linear memory. Emscripten's default (2 GiB) makes `new WebAssembly.Memory`
+# throw on iOS Safari, so it is capped here; 1 GiB matches the guidance in SDL's README-emscripten
+# for running on iOS browsers while leaving enough headroom for large battles on desktop.
+FHEROES2_EMSCRIPTEN_MAX_MEMORY ?= 1gb
+
 SDL2_MIXER_FORMATS := mid,mp3,ogg
 
 CCFLAGS := $(CCFLAGS) \
@@ -40,11 +45,13 @@ LDFLAGS := $(LDFLAGS) \
 	-sASYNCIFY_STACK_SIZE=64kb \
 	-sINCOMING_MODULE_JS_API=canvas,preRun,setStatus \
 	-sINITIAL_MEMORY=128mb \
+	-sMAXIMUM_MEMORY=$(FHEROES2_EMSCRIPTEN_MAX_MEMORY) \
 	-sMEMORY_GROWTH_LINEAR_STEP=32mb \
 	-sNO_DISABLE_EXCEPTION_CATCHING \
 	-sSDL2_MIXER_FORMATS=$(SDL2_MIXER_FORMATS) \
 	-sSTACK_SIZE=256kb \
 	-sSTRICT \
+	-sEXPORTED_RUNTIME_METHODS=FS,IDBFS,ENV,addRunDependency,removeRunDependency \
 	-lGL \
 	-lhtml5 \
 	-lidbfs.js

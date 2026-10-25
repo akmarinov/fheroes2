@@ -60,7 +60,33 @@
 
 #if defined( ANDROID )
 #include <SDL_error.h>
-#include <SDL_system.h>
+#endif
+
+#if defined( __EMSCRIPTEN__ )
+#include <emscripten.h>
+
+namespace
+{
+    // Returns the number of touch points reported by the browser itself. SDL only registers a touch
+    // device once the first touch event reaches the canvas, so it cannot be used to decide whether
+    // the device is capable of touch input before the player has already touched the screen.
+    int browserMaxTouchPoints()
+    {
+#if defined( __GNUC__ )
+#pragma GCC diagnostic push
+
+#pragma GCC diagnostic ignored "-Wvariadic-macro-arguments-omitted"
+#endif
+
+        const int touchPoints = EM_ASM_INT( return navigator.maxTouchPoints || 0 );
+
+#if defined( __GNUC__ )
+#pragma GCC diagnostic pop
+#endif
+
+        return touchPoints;
+    }
+}
 #endif
 
 #if ( !defined( __linux__ ) || defined( ANDROID ) )
@@ -273,13 +299,24 @@ bool System::isHandheldDevice()
 
 bool System::isTouchInputAvailable()
 {
+#if defined( __EMSCRIPTEN__ )
+    // A running browser instance cannot be relied upon: in a web app the player may have been using
+    // a mouse so far, and SDL keeps a touch device registered once it has been seen.
+    return SDL_GetNumTouchDevices() > 0 || browserMaxTouchPoints() > 0;
+#else
     return SDL_GetNumTouchDevices() > 0;
+#endif
 }
 
 bool System::isVirtualKeyboardSupported()
 {
 #if defined( ANDROID ) || defined( TARGET_PS_VITA ) || defined( TARGET_NINTENDO_SWITCH ) || defined( __IPHONEOS__ )
     return true;
+#elif defined( __EMSCRIPTEN__ )
+    // A WebAssembly application has no native text input: a focused HTML element is required to open
+    // the keyboard of the operating system and the whole user interface is rendered on a canvas.
+    // Therefore the in-game keyboard is the only way to type on a touch device.
+    return isTouchInputAvailable();
 #else
     return false;
 #endif

@@ -65,6 +65,7 @@
 #include "logging.h"
 #include "render_processor.h"
 #include "screen.h"
+#include "system.h"
 
 namespace
 {
@@ -376,7 +377,7 @@ namespace EventProcessing
             }
 #endif
 
-            if ( SDL_GetNumTouchDevices() <= 0 ) {
+            if ( !System::isTouchInputAvailable() ) {
                 return;
             }
 
