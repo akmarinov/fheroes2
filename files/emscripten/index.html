@@ -187,6 +187,26 @@
       opacity: 0.66;
     }
 
+    .choices {
+      display: flex;
+      justify-content: center;
+      margin: 0.2rem 0 0;
+    }
+
+    .checkbox {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      font-size: 0.85rem;
+      cursor: pointer;
+    }
+
+    .checkbox input {
+      width: 1.1rem;
+      height: 1.1rem;
+      accent-color: var(--accent);
+    }
+
     [hidden] {
       display: none !important;
     }
@@ -206,6 +226,8 @@
       <div class="buttons">
         <label class="button" for="zip-input">Select a ZIP archive</label>
         <input id="zip-input" type="file" accept=".zip,application/zip,application/x-zip-compressed">
+        <label class="button" for="inno-input">Select the GOG installer</label>
+        <input id="inno-input" type="file" accept=".exe,application/x-msdownload,application/vnd.microsoft.portable-executable">
         <label class="button" id="folder-label" for="folder-input" hidden>Select a folder</label>
         <input id="folder-input" type="file" webkitdirectory multiple hidden>
         <label class="button" for="files-input">Select files</label>
@@ -213,6 +235,12 @@
         <button id="play-button" type="button" hidden>Play</button>
         <button id="forget-button" type="button" hidden>Forget files</button>
       </div>
+      <p class="choices">
+        <label class="checkbox" for="videos-input">
+          <input id="videos-input" type="checkbox">
+          Also take the animation videos when importing an installer (the largest part of the game)
+        </label>
+      </p>
       <div id="gate-track" class="track" hidden><span></span></div>
       <div id="gate-status" class="status"></div>
       <div id="gate-error" class="error"></div>
@@ -259,6 +287,8 @@
     const bootError = document.getElementById("boot-error");
 
     const zipInput = document.getElementById("zip-input");
+    const innoInput = document.getElementById("inno-input");
+    const videosInput = document.getElementById("videos-input");
     const folderInput = document.getElementById("folder-input");
     const folderLabel = document.getElementById("folder-label");
     const filesInput = document.getElementById("files-input");
@@ -280,7 +310,9 @@
     const CHUNK_SIZE = 4 * 1024 * 1024;
 
     // Only these subtrees matter; the rest of a game folder is optional at runtime and can be huge.
-    const RELEVANT_PREFIXES = ["data/", "maps/", "music/", "anim/", "anim2/", "heroes2/"];
+    // A wrapper folder named after the game is deliberately not among them: it has to be stripped
+    // instead, so that its files can still reach the layout the engine expects.
+    const RELEVANT_PREFIXES = ["data/", "maps/", "music/", "anim/", "anim2/"];
 
     // The demo release ships a data folder without the aggregate file, so the check cannot be skipped.
     const MANDATORY = ["data/heroes2.agg"];
@@ -300,17 +332,69 @@
       bar.style.width = `${Math.round(Math.max(0, Math.min(1, fraction)) * 100)}%`;
     }
 
+    /*
+     * WebKit leaves `transaction.error` null when it aborts a transaction on its own, and an IndexedDB
+     * abort while a tab is hidden is the usual shape of that on iOS. A rejected promise may also carry
+     * a DOMException, a string or a bare event, so every error is rendered through this, which never
+     * returns an empty string and never returns the word "null".
+     */
+    function describeError(error) {
+      let text = "";
+
+      try {
+        if (error instanceof Error || (error && typeof error.message === "string" && error.message)) {
+          const name = error.name && error.name !== "Error" ? `${error.name}: ` : "";
+          text = `${name}${error.message}`;
+
+          // An abort carries its reason in the transaction, not in the (often absent) error.
+          if (error.name === "QuotaExceededError") {
+            text += " The browser refused to store more data on this device. Import the data and maps"
+              + " folders without the animation videos; the game runs fine without them.";
+          }
+          else if (error.name === "AbortError" && !/hidden|background/i.test(text)) {
+            text += " The browser stopped a database operation. On a phone this happens when the page"
+              + " goes to the background or runs low on memory; keep this screen visible and try again.";
+          }
+        }
+        else if (typeof error === "string" && error) {
+          text = error;
+        }
+        else if (error && typeof error.toString === "function" && error.toString !== Object.prototype.toString) {
+          text = error.toString();
+        }
+        else if (error && typeof error.type === "string") {
+          // Event objects, notably an unhandled `error` event on window.
+          text = `${error.type} (${error.filename || "page"})`;
+        }
+        else if (error !== undefined && error !== null && error !== false) {
+          text = JSON.stringify(error) || String(error);
+        }
+      }
+      catch (stringifyFailure) {
+        text = "";
+      }
+
+      if (!text || text === "null" || text === "undefined") {
+        text = document.hidden
+          ? "The browser interrupted the operation while the page was in the background."
+          : "An unknown error occurred. The browser console has the details.";
+      }
+
+      return text;
+    }
+
     function fail(message) {
       gate.hidden = false;
       booting.hidden = true;
       paint(gateTrack, gateBar, -1);
       gateStatus.textContent = "";
-      gateError.textContent = message;
+      gateError.textContent = describeError(message);
       enablePickers(true);
     }
 
     function enablePickers(enabled) {
-      for (const input of [zipInput, folderInput, filesInput, playButton, forgetButton]) {
+      for (const input of [zipInput, innoInput, folderInput, filesInput, videosInput, playButton,
+        forgetButton]) {
         input.disabled = !enabled;
       }
 
@@ -437,12 +521,46 @@
 
       return new Promise((resolve, reject) => {
         const transaction = database.transaction(ASSET_STORE, mode);
+        let settled = false;
 
-        transaction.oncomplete = () => resolve();
-        transaction.onerror = () => reject(transaction.error);
-        transaction.onabort = () => reject(transaction.error);
+        const settle = error => {
+          if (settled) {
+            return;
+          }
+          settled = true;
 
-        work(transaction.objectStore(ASSET_STORE), resolve, reject);
+          if (error) {
+            reject(error);
+          }
+          else {
+            resolve();
+          }
+        };
+
+        const report = kind => {
+          // WebKit leaves `error` null on transactions it aborts itself, which used to surface as the
+          // word "null" on the phone. The transaction state is the honest diagnosis, so build the
+          // rejection around it and keep the engine's error as the cause when there is one.
+          const original = transaction.error;
+          const suffix = original ? ` (${original.name || "error"}: ${original.message || "no message"})` : " (no error reported by the browser)";
+          const detail = new Error(`The browser ${kind} the ${mode} database transaction${suffix}`);
+
+          detail.cause = original || undefined;
+          detail.name = original && original.name === "QuotaExceededError" ? "QuotaExceededError" : "AbortError";
+
+          return detail;
+        };
+
+        transaction.oncomplete = () => settle();
+        transaction.onerror = () => settle(report("failed"));
+        transaction.onabort = () => settle(report("aborted"));
+
+        try {
+          work(transaction.objectStore(ASSET_STORE), settle, error => settle(error instanceof Error ? error : new Error(String(error))));
+        }
+        catch (error) {
+          settle(error instanceof Error ? error : new Error(String(error)));
+        }
       });
     }
 
@@ -521,24 +639,22 @@
     }
 
     /*
-     * A folder or an archive usually carries one common top level: either the picked folder itself, or
-     * the data directory of the game. The former has to go, the latter is part of the layout the engine
-     * expects, so a level is only removed when what remains of the paths still looks like game data.
+     * A folder or an archive usually wraps the game in one or more top-level directories named after it
+     * (`HoMM2/data/...`, or `Heroes 2/Heroes of Might and Magic II/data/...`), and the engine only ever
+     * looks under `data`, `maps`, `music` and `anim`. Any directory level that is not one of those is
+     * not part of the layout the engine expects, so every such leading level is removed and whatever
+     * survives the stripping is what decides whether a file matters. This also covers a user picking
+     * the `data` folder itself: the browser hands over `data/HEROES2.AGG` verbatim, which already is
+     * game data and must be left alone.
      */
-    function commonRoot(paths) {
-      const cut = paths[0].indexOf("/");
+    function gamePath(path) {
+      const parts = path.split("/").filter(Boolean);
 
-      if (cut <= 0) {
-        return "";
+      while (parts.length > 1 && !RELEVANT_PREFIXES.includes(`${parts[0]}/`)) {
+        parts.shift();
       }
 
-      const root = paths[0].slice(0, cut + 1);
-
-      if (!paths.every(path => path.startsWith(root))) {
-        return "";
-      }
-
-      return paths.some(path => isRelevant(path.slice(root.length))) ? root : "";
+      return parts.join("/");
     }
 
     function requireMandatory(paths) {
@@ -557,26 +673,26 @@
      * ---------------------------------------------------------------------- */
 
     async function importLooseFiles(files) {
-      const named = files.map(item => ({ path: homeLoosePath(normalizePath(item.name)), blob: item.blob }));
+      const named = files.map(item => ({ path: gamePath(homeLoosePath(normalizePath(item.name))), blob: item.blob }));
       const relevant = named.filter(item => isRelevant(item.path));
 
       if (relevant.length === 0) {
         throw new Error("None of the selected files belongs to the game. Pick the contents of the game folder, or a ZIP archive of it.");
       }
 
-      const root = commonRoot(relevant.map(item => item.path));
-      const entries = relevant.map(item => ({ path: root ? item.path.slice(root.length) : item.path, blob: item.blob }));
-
-      requireMandatory(entries.map(item => item.path));
+      requireMandatory(relevant.map(item => item.path));
 
       let done = 0;
+      let storedBytes = 0;
 
-      for (const entry of entries) {
+      for (const entry of relevant) {
+        gateStatus.textContent = `Storing game file ${++done} of ${relevant.length}: ${entry.path}`;
         await putAsset(entry.path, entry.blob);
-        paint(gateTrack, gateBar, ++done / entries.length);
+        storedBytes += entry.blob.size;
+        paint(gateTrack, gateBar, done / relevant.length);
       }
 
-      return entries.length;
+      return { count: relevant.length, bytes: storedBytes };
     }
 
     /* ---------------------------------------------------------------------- *
@@ -793,7 +909,7 @@
       const relevant = [];
 
       for (const entry of entries) {
-        const path = homeLoosePath(normalizePath(entry.name));
+        const path = gamePath(homeLoosePath(normalizePath(entry.name)));
 
         if (isRelevant(path)) {
           relevant.push({ ...entry, path });
@@ -804,25 +920,170 @@
         throw new Error("The archive holds none of the data, maps, music or animation folders of the game.");
       }
 
-      const root = commonRoot(relevant.map(entry => entry.path));
-
-      requireMandatory(relevant.map(entry => (root ? entry.path.slice(root.length) : entry.path)));
+      requireMandatory(relevant.map(entry => entry.path));
 
       let done = 0;
+      let storedBytes = 0;
 
       // Every entry is unpacked, stored and released on its own, so memory stays flat regardless of the
       // size of the archive.
       for (const entry of relevant) {
-        const path = root ? entry.path.slice(root.length) : entry.path;
+        const path = entry.path;
+
+        gateStatus.textContent = `Unpacking game file ${++done} of ${relevant.length}: ${path}`;
+
         const header = await localHeaderLength(archive, entry.localOffset);
         const payload = archive.slice(entry.localOffset + header, entry.localOffset + header + entry.compressedSize);
         const blob = await inflate(payload, entry.method, entry.uncompressedSize);
 
         await putAsset(path, blob);
-        paint(gateTrack, gateBar, ++done / relevant.length);
+        storedBytes += blob.size;
+        paint(gateTrack, gateBar, done / relevant.length);
       }
 
-      return relevant.length;
+      return { count: relevant.length, bytes: storedBytes };
+    }
+
+    /* ---------------------------------------------------------------------- *
+     * Import: the GOG Windows installer (Inno Setup 5.6.2, unicode)
+     * ---------------------------------------------------------------------- */
+
+    /*
+     * GOG ships HoMM2 as a single Windows installer, so on an iPhone the .exe downloaded from the store
+     * is the only copy a user has. Reading it here avoids the desktop step: inno.js walks the Inno
+     * structures (loader table, setup header, chunk table, file table) and inno.wasm decodes the LZMA2
+     * chunks, one chunk at a time, so a 466 MB installer is never held in memory.
+     *
+     * The two modules are imported lazily and only when this path is taken: a player who brings a ZIP
+     * should not pay for downloading an extractor they will not use.
+     */
+    let innoModules = null;
+
+    async function loadExtractor() {
+      if (!innoModules) {
+        const reader = await import("./inno.js");
+        // The animation films live inside a ISO 9660 image, which needs a second reader to reach.
+        const iso = await import("./iso9660.js").catch(error => {
+          console.warn("Animation videos are unavailable:", error);
+          return null;
+        });
+
+        innoModules = { InnoInstaller: reader.InnoInstaller, Iso9660: iso ? iso.Iso9660 : null };
+      }
+
+      return innoModules;
+    }
+
+    /*
+     * en-US, always. The GOG installer tags most of its files [en-US] and hands the other languages to
+     * its own downloader instead of packing them: selecting de-DE leaves 283 of 488 entries with no
+     * bytes in this .exe, which is what an offline import cannot use. The reference reader makes the
+     * same choice its default language, and requireMandatory() below turns any such mistake into a
+     * message rather than a game that will not start.
+     */
+    const INSTALLER_LANGUAGE = "en-US";
+
+    async function importInstaller(file) {
+      const { InnoInstaller, Iso9660 } = await loadExtractor();
+
+      gateStatus.textContent = "Reading the installer";
+
+      const installer = await InnoInstaller.open(file, { language: INSTALLER_LANGUAGE });
+
+      try {
+        /* Entries are addressed by their position in installer.entries, which is what extract() and
+           createRangeSource() take, so the index is carried alongside each entry rather than looked up
+           by path again. */
+        const wanted = [];
+
+        for (const [index, entry] of installer.entries.entries()) {
+          if (installer.isRelevant(entry)) {
+            wanted.push({ index, entry, tier: installer.tierOf(entry) });
+          }
+        }
+
+        if (wanted.length === 0) {
+          throw new Error("This installer holds none of the data, maps or music folders of the game."
+            + " It is probably not the Heroes of Might and Magic II setup.");
+        }
+
+        /* The disc image only becomes files once something reads the ISO inside it. Without iso9660.js
+           the films cannot be reached, and the rest of the game still imports. */
+        const plain = wanted.filter(item => item.tier !== "cd");
+        const disc = wanted.find(item => item.tier === "cd");
+        const films = videosInput.checked && Iso9660 && disc
+          ? await listFilms(installer, Iso9660, disc.index)
+          : [];
+
+        const storeAs = name => gamePath(homeLoosePath(normalizePath(name)));
+
+        requireMandatory(plain.map(item => storeAs(item.entry.path))
+          .concat(films.map(film => storeAs(film.path))));
+
+        /* Progress is weighted by bytes rather than by file count: one aggregate archive is 43 MB while
+           the whole music folder is 73 MB, so counting files would leave the bar still for a third of
+           the import. */
+        const total = plain.reduce((sum, item) => sum + item.entry.size, 0)
+          + films.reduce((sum, film) => sum + film.size, 0);
+        let done = 0;
+        let storedBytes = 0;
+        let count = 0;
+
+        const store = async (name, work) => {
+          gateStatus.textContent = `Extracting ${++count} of ${plain.length + films.length}: ${name}`;
+
+          const blob = await work();
+
+          await putAsset(storeAs(name), blob);
+          storedBytes += blob.size;
+          done += blob.size;
+          paint(gateTrack, gateBar, total > 0 ? done / total : 1);
+        };
+
+        for (const item of plain) {
+          await store(item.entry.path, async () => (await installer.extract(item.index)).blob);
+        }
+
+        for (const film of films) {
+          await store(film.path, film.read);
+        }
+
+        return { count, bytes: storedBytes, skippedVideos: !videosInput.checked && !!disc };
+      }
+      finally {
+        installer.dispose();
+      }
+    }
+
+    /*
+     * The videos of the GOG release are inside homm2.gog, a raw-mode CD image stored as one Inno entry
+     * of 26 solid chunks. iso9660.js reads it through the seekable view createRangeSource() returns,
+     * which decodes at most one chunk at a time, so listing the films and reading them one by one costs
+     * a chunk plus one film rather than the whole 267 MB image.
+     *
+     * The image stores its files under HEROES2/ANIM, and the engine looks in anim/, which gamePath()
+     * folds away on the way into the store.
+     */
+    async function listFilms(installer, Iso9660, discIndex) {
+      gateStatus.textContent = "Looking inside the CD image for the animation videos";
+
+      let iso = null;
+
+      try {
+        iso = await Iso9660.open(installer.createRangeSource(discIndex));
+      }
+      catch (error) {
+        // An image this reader cannot parse is no reason to refuse the rest of the game.
+        console.warn("The CD image inside the installer could not be read:", error);
+        return [];
+      }
+
+      return iso.list().filter(item => /(^|\/)anim\/[^/]+\.smk$/i.test(item.path)).map(film => ({
+        path: film.path,
+        size: film.size,
+        // Reading stays deferred so that only one film is in memory at a time.
+        read: () => iso.read(film),
+      }));
     }
 
     /* ---------------------------------------------------------------------- *
@@ -987,12 +1248,17 @@
                 throw new Error("The stored game files have disappeared. Import them again.");
               }
 
-              bootStatus.textContent = "Restoring game files";
+              let done = 0;
+              let totalBytes = 0;
+
+              bootStatus.textContent = `Restoring game files (0 of ${paths.length})`;
               paint(bootTrack, bootBar, 0);
 
-              let done = 0;
-
               for (const path of paths) {
+                // A hang on a phone has to name the file it hung on; the generic text hid whether the
+                // stall was reading from IndexedDB or copying into the engine's file system.
+                bootStatus.textContent = `Restoring game file ${++done} of ${paths.length}: ${path}`;
+
                 const blob = await readAsset(path);
 
                 if (!blob) {
@@ -1003,16 +1269,18 @@
 
                 makeDirectory(fs, target.slice(0, target.lastIndexOf("/")));
                 await writeBlob(fs, target, blob);
+                totalBytes += blob.size;
 
-                paint(bootTrack, bootBar, ++done / paths.length);
+                paint(bootTrack, bootBar, done / paths.length);
               }
 
+              bootStatus.textContent = "Starting the engine";
               finish("game-files");
             })().catch(error => {
               console.error(error);
               runtimeRequested = false;
               booting.hidden = true;
-              fail(`${error && error.message ? error.message : error}`);
+              fail(error);
             });
           }
         ]
@@ -1022,6 +1290,29 @@
     /* ---------------------------------------------------------------------- *
      * Gate
      * ---------------------------------------------------------------------- */
+
+    /*
+     * iOS suspends a tab the moment the screen locks, and an import of a few hundred megabytes takes
+     * long enough for that to happen. A wake lock cannot be guaranteed (the browser may refuse it), so
+     * it is held best-effort around the operation that is most likely to be interrupted.
+     */
+    async function withWakeLock(work) {
+      let lock = null;
+
+      try {
+        lock = await navigator.wakeLock?.request("screen") || null;
+      }
+      catch (refused) {
+        lock = null;
+      }
+
+      try {
+        return await work();
+      }
+      finally {
+        lock?.release?.();
+      }
+    }
 
     async function importThenPlay(work) {
       if (busy) {
@@ -1034,21 +1325,57 @@
       gateStatus.textContent = "Reading";
 
       try {
-        const count = await work();
+        const result = await withWakeLock(work);
+        const count = typeof result === "object" && result ? result.count : result;
+        const bytes = typeof result === "object" && result ? result.bytes : 0;
+        const mebibytes = Math.round(bytes / (1024 * 1024));
 
-        gateStatus.textContent = `${count} game files stored on this device`;
+        gateStatus.textContent = `${count} game files (${mebibytes} MB) stored on this device`;
         paint(gateTrack, gateBar, 1);
         playButton.hidden = false;
         forgetButton.hidden = false;
+
+        if (result && result.skippedVideos) {
+          gateStatus.textContent += ". The animation videos were left out; tick the box and pick the"
+            + " installer again to add them.";
+        }
+
+        if (bytes > 250 * 1024 * 1024) {
+          // An advisory, so it belongs in the status line: the error slot is for failures only, and
+          // filling it with advice trains the reader to think the import went wrong.
+          gateStatus.textContent += " Large import: every stored byte is copied into the game's memory"
+            + " at each start, which a phone can refuse; if starting fails, use Forget files and import"
+            + " without the animation videos.";
+        }
 
         // Importing is a genuine user gesture, the best possible moment to launch the runtime.
         setTimeout(startRuntime, 120);
       }
       catch (error) {
         console.error(error);
-        fail(`${error && error.message ? error.message : error}`);
+        fail(error);
       }
     }
+
+    zipInput.addEventListener("change", () => {
+      const archive = zipInput.files && zipInput.files[0];
+
+      zipInput.value = "";
+      if (archive) {
+        gateStatus.textContent = "Unpacking";
+        importThenPlay(() => importArchive(archive));
+      }
+    });
+
+    innoInput.addEventListener("change", () => {
+      const installer = innoInput.files && innoInput.files[0];
+
+      innoInput.value = "";
+      if (installer) {
+        gateStatus.textContent = "Opening the installer";
+        importThenPlay(() => importInstaller(installer));
+      }
+    });
 
     zipInput.addEventListener("change", () => {
       const archive = zipInput.files && zipInput.files[0];
@@ -1090,7 +1417,7 @@
         location.reload();
       }
       catch (error) {
-        fail(`${error && error.message ? error.message : error}`);
+        fail(error);
       }
     });
 
@@ -1116,6 +1443,24 @@
       });
     }
 
+    /*
+     * Without these, an uncaught fault of the engine (an out-of-memory abort of WebAssembly is the
+     * common one on a phone) kills the tab's script and leaves the STARTING overlay frozen with no
+     * explanation. Anything that arrives here while the engine is coming up is surfaced instead.
+     */
+    window.addEventListener("error", event => {
+      if (!booting.hidden) {
+        bootStatus.textContent = "The engine stopped starting";
+        bootError.textContent = describeError(event.error || event);
+      }
+    });
+
+    window.addEventListener("unhandledrejection", event => {
+      if (!booting.hidden) {
+        bootStatus.textContent = "The engine stopped starting";
+        bootError.textContent = describeError(event.reason);
+      }
+    });
     followCanvasResolution();
     enablePickers(true);
 

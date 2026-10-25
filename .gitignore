@@ -65,9 +65,21 @@
 *.smk
 *.ogg
 DATA/NETLODR.DAT
+# Containers the in-browser installer ingest can produce or consume. A copy of the game is never
+# distributable, so every archive form it travels in is ignored here as well: the Web launcher can be
+# handed a GOG installer, an extracted folder or an archive of one, and a developer following the
+# instructions ends up with all three inside this working tree.
+*.exe
+*.zip
+*.iso
+*.gog
 
 # build directory
 build
+
+# The extractor's wasm is a build product (script/pwa/inno/build.sh writes it there by default, and
+# script/pwa/build.sh rebuilds it into build/pwa on every run), so it never belongs in the tree.
+script/pwa/inno/inno.wasm
 
 # fheroes2 related files
 files/save

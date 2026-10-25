@@ -35,8 +35,15 @@ rm -rf "$out"
 mkdir -p "$out"
 
 cp "$runtime_dir"/fheroes2.js "$runtime_dir"/fheroes2.wasm "$runtime_dir"/fheroes2.data "$out"/
-cp "$source_dir"/index.html "$source_dir"/manifest.webmanifest "$source_dir"/sw.js "$source_dir"/fheroes2.jpeg "$out"/
+cp "$source_dir"/index.html "$source_dir"/manifest.webmanifest "$source_dir"/sw.js \
+   "$source_dir"/fheroes2.jpeg "$source_dir"/inno.js "$source_dir"/iso9660.js "$out"/
 cp -R "$source_dir"/icons "$out"/icons
+
+# The installer extractor is a separate, tiny wasm module: it is loaded by the ingest UI rather than by
+# the engine, it links only vendored decoders, and it has to be rebuildable without building fheroes2.
+# It is rebuilt on every run -- a one-second compile -- so build/pwa always matches script/pwa/inno/
+# instead of keeping whatever an earlier build left there.
+"$root"/script/pwa/inno/build.sh "$out"
 
 # The worker keeps every asset of one build under a cache named after this string, so it has to change
 # whenever the payload changes and must not change when it does not: a rebuild of unchanged sources has
@@ -50,7 +57,8 @@ else
     digest_of() { shasum -a 256 "$@"; }
 fi
 
-digest=$(digest_of "$out"/fheroes2.js "$out"/fheroes2.wasm "$out"/fheroes2.data "$out"/index.html | cut -c1-16 | digest_of | cut -c1-10)
+digest=$(digest_of "$out"/fheroes2.js "$out"/fheroes2.wasm "$out"/fheroes2.data "$out"/index.html \
+    "$out"/inno.wasm "$out"/inno.js "$out"/iso9660.js | cut -c1-16 | digest_of | cut -c1-10)
 
 version="$revision-$digest"
 
@@ -60,7 +68,8 @@ sed "s/__FH2_VERSION__/$version/" "$out"/sw.js >"$out"/sw.js.tmp && mv "$out"/sw
 
 # Images are already compressed, so only the code, the data bundle and the documents are worth
 # transforming. A server that prefers one encoding over the other picks the matching sidecar.
-for file in fheroes2.js fheroes2.wasm fheroes2.data index.html manifest.webmanifest sw.js; do
+for file in fheroes2.js fheroes2.wasm fheroes2.data index.html manifest.webmanifest sw.js \
+            inno.wasm inno.js iso9660.js; do
     brotli -q 11 -k -f "$out/$file" -o "$out/$file.br"
     gzip -c -9 -n -f "$out/$file" >"$out/$file.gz"
 done

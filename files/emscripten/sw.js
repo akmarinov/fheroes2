@@ -20,6 +20,9 @@ const SHELL = [
   "./fheroes2.wasm",
   "./fheroes2.data",
   "./fheroes2.jpeg",
+  "./inno.js",
+  "./inno.wasm",
+  "./iso9660.js",
   "./icons/icon-180.png",
   "./icons/icon-192.png",
   "./icons/icon-512.png"

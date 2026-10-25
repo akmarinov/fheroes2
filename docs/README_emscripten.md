@@ -37,6 +37,38 @@ FHEROES2_WITH_THREADS=ON LDFLAGS="-sMODULARIZE -sEXPORTED_RUNTIME_METHODS=run -s
 
 will build a WebAssembly binary with multithreading support, as well as with additional parameters for creating a module.
 
+### Rebuilding The Installer Extractor
+
+Reading an installer in the browser needs a second, much smaller wasm module besides the engine: it holds
+the decoders for the compression methods Inno Setup uses, while all the parsing and all the file I/O
+happen in JavaScript (`files/emscripten/inno.js`). It is built by its own script and is rebuilt by
+`script/pwa/build.sh` on every run, into `build/pwa`:
+
+```sh
+script/pwa/inno/build.sh          # writes script/pwa/inno/inno.wasm
+script/pwa/inno/build.sh elsewhere  # or wherever the module is wanted
+```
+
+`emcc` has to be on `PATH` (source the emsdk environment first), and that is all: the module links only
+sources vendored under `script/pwa/inno/third_party`, so the build downloads nothing and does not depend
+on the game build, on emscripten ports, or on a configure step. The third-party terms are recorded in
+`script/pwa/inno/LICENSES.md`.
+
+The module is DOM-free and exports nothing but a C ABI, so it can be exercised without a browser:
+
+```sh
+node script/pwa/test/test-inno.mjs                     # codec and format checks, needs no installer
+FH2_INNO_EXE=/path/to/setup_...exe node script/pwa/test/test-inno.mjs
+```
+
+With `FH2_INNO_EXE` set, the harness parses that installer and compares what it finds against
+`innoextract` (set `FH2_INNO_ORACLE` to its path, and `FH2_INNO_ORACLE_LIST` to a saved
+`innoextract --list-sizes -m` listing): every file name and size for `data`, `maps` and `music`, the
+SHA-256 of a sample of extracted files, the films inside the CD image, plus the cases that must be
+refused rather than misread -- a truncated file, a corrupt header, an unknown compression method. Without
+the installer those checks are skipped, and without an `innoextract` to compare against the sizes are
+still cross-checked against what the installer itself declares.
+
 ## Running the Wasm Port on a Web Server
 
 ### Configuring the Web Server
@@ -102,7 +134,16 @@ that does not opt in.
 ## Playing As An Installed Application
 
 The launcher asks for the game files once and keeps them on the device; nothing is uploaded anywhere.
-There are three ways of handing them over:
+There are four ways of handing them over:
+
+* The GOG Windows installer for the game (`setup_heroes_of_might_and_magic_2_gold_*.exe`). The launcher
+  reads the Inno Setup payload in the browser and stores the `data`, `maps` and `music` folders it finds
+  inside, so nothing has to be unpacked on another machine first. The installer is never buffered whole:
+  each file is fetched by byte range, decoded in 256 KiB pieces and stored as soon as it is complete. The
+  animation videos sit in a raw CD image inside the same
+  installer and account for half its size, so they are only extracted when the box that offers them is
+  ticked; unticked, the import ends as soon as the game itself is stored. Only the bytes of the file being
+  extracted are ever in memory, so the size of the installer is not limited by the memory of the tab.
 
 * A ZIP archive of the game folder, or of the `data` folder. The archive is unpacked in the browser, entry
   by entry, so the size of the archive is not limited by the memory of the tab. This works everywhere.
