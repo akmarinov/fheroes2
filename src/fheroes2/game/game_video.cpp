@@ -36,6 +36,7 @@
 #include "dir.h"
 #include "game_delays.h"
 #include "game_video_type.h"
+#include "lazy_media.h"
 #include "localevent.h"
 #include "logging.h"
 #include "math_tools.h"
@@ -90,6 +91,13 @@ namespace Video
                     if ( dirIdx > 0 ) {
                         // Put the current directory at the first place to increase cache hit chance.
                         std::swap( videoDir[0], videoDir[dirIdx] );
+                    }
+
+                    // The WebAssembly build holds the bytes of a film out of the memory of the engine until
+                    // the film is about to be watched; see System::LoadAnimationFile. A film whose bytes
+                    // cannot be had is a file which is not there, as the paths of the loops below treat it.
+                    if ( !System::LoadAnimationFile( path ) ) {
+                        continue;
                     }
 
                     return true;

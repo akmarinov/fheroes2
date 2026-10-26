@@ -1289,7 +1289,7 @@ async function uiProbe(videos) {
 /* The functions below are the ones the checks call; everything else in the page keeps running with
    its own private state, exactly as a browser tab's would. */
 const UI_EXPORTS = ['importInstaller', 'importArchive', 'listAssets', 'gamePath', 'homeLoosePath',
-  'normalizePath'];
+  'normalizePath', 'isAnimation', 'stageAnimationPlaceholders'];
 
 async function loadUi() {
   const dir = path.join(TMP, 'ui');
@@ -1346,6 +1346,24 @@ async function loadUi() {
       globalThis.gc?.();
     },
     clear: () => stored.clear(),
+    /* The deferred-animation provider of the page reads films back one at a time while the engine is
+       running, so the fake has to answer that read as well as the writes of an import. A key holding no
+       bytes answers as an empty file rather than as nothing: what a browser hands back for a key which
+       was stored empty is a Blob of length zero, and the page has to treat that as a film it cannot
+       play, which is only testable if the fake is honest about it. */
+    get: (key) => {
+      const request = { result: null };
+
+      Object.defineProperty(request, 'onsuccess', {
+        set(handler) {
+          const record = stored.get(key);
+
+          request.result = record ? (record.blob ?? new Blob([])) : undefined;
+          handler({ target: request });
+        },
+      });
+      return request;
+    },
     /* listAssets() reads `request.result`, so the result has to be on the request as well as in the
        event object a browser would hand the handler. */
     getAllKeys: () => {
@@ -1393,6 +1411,22 @@ async function loadUi() {
   });
   put('navigator', { standalone: false, wakeLock: null, serviceWorker: null });
   put('location', { protocol: 'https:', hostname: 'localhost', reload() {} });
+  /* The page keeps a journal of start-up in localStorage, because a phone can kill the tab without
+     anything inside it running; reading and clearing it is part of opening the page, so the fake has to
+     be there rather than throw. It is the plain key-value shape the page uses, no more. */
+  put('localStorage', {
+    _values: new Map(),
+    getItem(key) { return this._values.has(key) ? this._values.get(key) : null; },
+    setItem(key, value) { this._values.set(key, String(value)); },
+    removeItem(key) { this._values.delete(key); },
+  });
+  /* The page watches its own status lines through a MutationObserver to write the journal. The stub
+     never reports a mutation, which is the honest answer for elements that are plain objects: the
+     journal itself is exercised through the calls the checks make below. */
+  put('MutationObserver', class {
+    observe() {}
+    disconnect() {}
+  });
   /* The page probes for directory-pick support with `"webkitdirectory" in HTMLInputElement.prototype`,
      which decides whether the folder button is offered. Reporting it absent is the honest answer for a
      stub that cannot pick a directory, and matches an old iOS Safari. */
@@ -1526,6 +1560,70 @@ async function uiSuite() {
     if (!/HEROES2\.AGG/.test(message)) { fail(`unexpected: "${message}"`); }
     if (stored.size !== 0) { fail('files were stored despite the refusal'); }
     return 'refused before anything was stored';
+  });
+
+  /* The memory a phone will not give: the engine starts with the animation films as empty files and asks
+     for their bytes as it reaches one, one film at a time, so the sum of the folder never lands in the
+     memory of the page. The three halves of that agreement are checked separately: which files may be
+     deferred at all, what the page puts in the engine's file system for them, and what it hands over when
+     asked. */
+  check('ui: only the animation folders may be kept out of memory', () => {
+    /* The keys of the store are lowercased by the importer, so the prefixes are matched as they are
+       written; a name which did not match would simply be restored in full, which is the safe
+       direction and is why an upper-case spelling belongs with the files that stay resident. */
+    const deferable = ['anim/choose.smk', 'anim2/intro.smk', 'anim/deep/nested.smk'];
+    const resident = ['data/heroes2.agg', 'maps/arena.mp2', 'music/sw/homm2_06.ogg',
+      'data/h2offer.smk', 'heroes2/anim/intro.smk', 'animx/other.smk', 'anim', 'ANIM/CHOOSE.SMK'];
+    const wrong = deferable.filter((path) => !page.isAnimation(path))
+      .concat(resident.filter((path) => page.isAnimation(path)));
+    if (wrong.length) { fail(`classified wrongly: ${wrong.join(', ')}`); }
+    return `${deferable.length + resident.length} paths classified`;
+  });
+
+  check('ui: a deferred film becomes an empty file, never a read', () => {
+    const written = [];
+    const made = [];
+    const fs = {
+      writeFile: (target, data) => { written.push([target, data.byteLength]); },
+      mkdir: (target) => { made.push(target); },
+      /* makeDirectory() asks whether a folder is already there; a file system which always says no
+         exercises the creation of every level of a nested film path. */
+      lookupPath: () => { throw new Error('absent'); },
+    };
+
+    page.stageAnimationPlaceholders(fs, ['anim/choose.smk', 'anim2/deep/second.smk'], '/data');
+
+    if (JSON.stringify(written) !== JSON.stringify([['/data/anim/choose.smk', 0],
+      ['/data/anim2/deep/second.smk', 0]])) {
+      fail(`staged ${JSON.stringify(written)}`);
+    }
+    for (const folder of ['/data', '/data/anim', '/data/anim2', '/data/anim2/deep']) {
+      if (!made.includes(folder)) { fail(`never created ${folder}`); }
+    }
+    return `${written.length} empty files, ${made.length} folders`;
+  });
+
+  /* The provider is installed on the global object while the page's own script runs, which is how the
+     engine reaches it. It is given the path exactly as the engine spells it: the data root, then the key
+     under which the import stored the film. */
+  await checkAsync('ui: the page hands over the bytes of a stored film', async () => {
+    stored.clear();
+    element('videos-input').checked = false;
+    await page.importArchive(new Blob([makeZip([
+      { name: 'Heroes2/data/HEROES2.AGG', body: new TextEncoder().encode('agg-a'), method: 0 },
+      { name: 'Heroes2/anim/choose.smk', body: new TextEncoder().encode('smk-bytes'), method: 0 },
+    ])]));
+
+    const given = await globalThis.fheroes2FetchAnimation('/data/anim/choose.smk');
+
+    if (!given) { fail('a stored film was reported as having no bytes'); }
+    if (new TextDecoder().decode(given) !== 'smk-bytes') { fail(`handed over "${new TextDecoder().decode(given)}"`); }
+    if (!(given instanceof Uint8Array)) { fail('bytes were not handed over as a view, which the engine needs to adopt them'); }
+
+    const missing = await globalThis.fheroes2FetchAnimation('/data/anim/absent.smk');
+
+    if (missing !== null) { fail(`a film which was never imported answered ${missing}`); }
+    return 'a stored film came back byte for byte, a missing one as nothing';
   });
 
   if (!EXE || !existsSync(EXE)) {
@@ -1699,6 +1797,10 @@ console.log(`node      ${process.version} on ${process.platform}, peak RSS at st
 console.log('');
 
 await codecSuite();
+/* The page's own start-up, import paths and deferred-animation provider are checked without a game
+   installer: only the two checks which drive the real installer through them report SKIP on their own,
+   so withholding the whole suite would hide them on every machine without the game. */
+await uiSuite();
 if (!EXE) {
   note('installer suite', 'SKIP', 'FH2_INNO_EXE is not set');
 } else if (!existsSync(EXE)) {
@@ -1706,7 +1808,6 @@ if (!EXE) {
 } else {
   console.log(`installer ${EXE} (${(statSync(EXE).size / MB).toFixed(1)} MiB)\n`);
   await installerSuite();
-  await uiSuite();
 }
 
 if (!process.env.FH2_KEEP_TMP) { rmSync(TMP, { recursive: true, force: true }); }

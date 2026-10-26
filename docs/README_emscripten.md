@@ -67,7 +67,9 @@ With `FH2_INNO_EXE` set, the harness parses that installer and compares what it 
 SHA-256 of a sample of extracted files, the films inside the CD image, plus the cases that must be
 refused rather than misread -- a truncated file, a corrupt header, an unknown compression method. Without
 the installer those checks are skipped, and without an `innoextract` to compare against the sizes are
-still cross-checked against what the installer itself declares.
+still cross-checked against what the installer itself declares. The checks of the launcher itself -- its
+import paths, its path folding, and the deferred animation videos described below -- need neither and run
+on every machine.
 
 ## Running the Wasm Port on a Web Server
 
@@ -158,6 +160,25 @@ There are four ways of handing them over:
 Saved games, settings and downloaded content live in a second store that survives an update of the build
 and is only cleared by the Forget button, which removes the imported game files and nothing else.
 
+### What Is Kept Out Of Memory
+
+A phone allows a web page only a limited amount of memory, and a linear memory which passes it is not
+reported as an error: the tab is simply killed, on iOS by a page of Safari's own which says nothing about
+what was being done. The animation videos are the largest part of the game -- the films of the campaigns
+alone are hundreds of megabytes -- so they are the one thing the build keeps out of it.
+
+At start-up the launcher restores the aggregates, the maps and the music into the file system of the
+engine, and creates an empty file for every film of the `anim` and `anim2` folders instead of its bytes. An
+empty file is the sign the engine looks for: when it is about to play such a film, it asks the page for the
+bytes (`System::LoadAnimationFile` in the engine, `fheroes2FetchAnimation` in the launcher), writes them
+into that file, and gives back the memory of the film it held before. Videos play one at a time, so the
+peak is the largest single film rather than the sum of the folder, and the whole game fits without
+asking the player to choose between its maps, its music and its videos.
+
+The names of the films still have to exist, since the engine finds its videos by listing the folders: a
+film which is not there at all is reported as missing and never asked for, which is also what happens to
+a video of an expansion the player does not own.
+
 ### Installing On An iPhone Or iPad
 
 The build is a progressive web app: serve it over HTTPS, open it in Safari, use the Share button and
@@ -167,8 +188,9 @@ files offline and is not fetched from the network on every launch.
 Things worth knowing about iOS:
 
 * The first start needs a download of a few megabytes; every later start is served from local storage.
-* The memory of a web page is capped. The build limits its linear memory to 1 GiB for that reason, which
-  is plenty: a game sitting at the main menu uses around 130 MB.
+* The memory of a web page is capped, and the build limits its linear memory to 1 GiB for that reason.
+  What a start brings into it is the aggregates, the maps and the music -- about 115 MB -- plus the film
+  being watched; see the section above.
 * Sound starts with the tap that launches the engine. Browsers refuse to let a page make noise before a
   gesture, and a WebAssembly application opens its audio device long after that tap, so the launcher
   creates the audio context while the tap is still happening and hands it to the port.
@@ -176,6 +198,9 @@ Things worth knowing about iOS:
   game is used for typing, since a canvas cannot summon the keyboard of the system.
 * A phone may reclaim the memory of a backgrounded web app. Imported files and saved games are on disk and
   survive that; an interrupted battle does not.
+* Where a device really cannot hold what was imported, the launcher writes a journal of its start-up into
+  local storage. Reopening the page after a kill names the last step the phone reached, which is the
+  closest thing to a crash report obtainable here.
 
 ### The Size Of The Game Area
 

@@ -44,10 +44,13 @@
       -webkit-tap-highlight-color: transparent;
     }
 
-    body {
-      /* Keeps the game clear of the notch and of the home indicator when installed. */
-      padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
-    }
+    /*
+     * The page is deliberately *not* padded by the safe area. The engine chooses the size of the game area
+     * from the box of the canvas, so every point taken off the canvas by an inset is a point the game never
+     * draws on: on a phone with a wide inset the whole interface shrinks into a column, which reads as the
+     * page ending early. The game is letterboxed inside its surface anyway, so the surface spans the screen
+     * and the text which has to stay legible (the launcher, the notices) keeps the inset as padding instead.
+     */
 
     #stage {
       position: relative;
@@ -108,7 +111,9 @@
       align-items: center;
       justify-content: center;
       gap: 0.9rem;
-      padding: 1.5rem;
+      /* The inset belongs to the words, not to the drawing surface: see the note above the stage. */
+      padding: calc( 1.5rem + env( safe-area-inset-top ) ) calc( 1.5rem + env( safe-area-inset-right ) )
+               calc( 1.5rem + env( safe-area-inset-bottom ) ) calc( 1.5rem + env( safe-area-inset-left ) );
       text-align: center;
       background: radial-gradient(circle at 50% 30%, #2b2219 0%, var(--background) 78%);
       overflow: auto;
@@ -296,7 +301,6 @@
       <div id="gate-error" class="error"></div>
       <div id="gate-recover" hidden>
         <p class="hint" id="recover-text"></p>
-        <button id="recover-button" type="button">Retry with only the core files</button>
       </div>
       <p id="install-hint" class="hint">Add this page to the home screen to play fullscreen.</p>
     </div>
@@ -353,7 +357,6 @@
     const installHint = document.getElementById("install-hint");
     const gateRecover = document.getElementById("gate-recover");
     const recoverText = document.getElementById("recover-text");
-    const recoverButton = document.getElementById("recover-button");
 
     /*
      * The engine looks up `data/*.agg`, `maps/*`, `music/*` and `anim/*` below every root directory, and
@@ -373,6 +376,20 @@
 
     // The demo release ships a data folder without the aggregate file, so the check cannot be skipped.
     const MANDATORY = ["data/heroes2.agg"];
+
+    /*
+     * The two animation folders are the largest part of the game - the films of the campaigns alone are
+     * hundreds of megabytes - and the engine no longer needs them in its memory to reach the main menu:
+     * the page creates an empty file for each film at start-up and hands over the bytes when the engine is
+     * about to play one, one film at a time. See System::LoadAnimationFile in the engine, which treats an
+     * empty file as the sign that the bytes are here rather than there. What stays resident is the
+     * aggregates, the maps and the music: about 115 MB, where the whole set is over a gigabyte.
+     */
+    const ANIMATION_PREFIXES = ["anim/", "anim2/"];
+
+    function isAnimation(path) {
+      return ANIMATION_PREFIXES.some(prefix => path.startsWith(prefix));
+    }
 
     const ASSET_DB = "fheroes2-assets";
     const ASSET_STORE = "files";
@@ -413,6 +430,28 @@
 
         session.steps.push([Math.round(performance.now()), String(text).slice(0, 200)]);
         session.alive = false;
+        localStorage.setItem(JOURNAL_KEY, JSON.stringify(session));
+      }
+      catch (storage) {
+        // Same.
+      }
+    }
+
+    /*
+     * The same journal, one notch lighter: fetching the bytes of a film happens while the game is running,
+     * where the engine is busy and a synchronous write is a stutter rather than a step. Only the handover
+     * of a film is written down, which is enough to tell a memory death during a video from one during a
+     * battle, and it happens a few times per hour of play.
+     */
+    function journalLazy(text) {
+      try {
+        const previous = localStorage.getItem(JOURNAL_KEY);
+        const session = previous ? JSON.parse(previous) : { steps: [] };
+
+        session.steps.push([Math.round(performance.now()), String(text).slice(0, 200)]);
+        if (session.steps.length > 80) {
+          session.steps.shift();
+        }
         localStorage.setItem(JOURNAL_KEY, JSON.stringify(session));
       }
       catch (storage) {
@@ -670,6 +709,32 @@
         objectStore.clear();
       });
     }
+
+    /*
+     * The engine asks for the bytes of one film through this, while it waits with its stack suspended.
+     * `enginePath` is the absolute path inside the engine's own file system, spelled the way the engine
+     * found it - which, since the names came from a listing of that file system, is the name this page
+     * wrote, lowercased by the importer; the store is keyed the same way, so the lookup needs nothing
+     * cleverer than the exact string. The answer is a view of the bytes, or null for a film which is not
+     * in the store: an import made without the videos, or a film of an expansion the player lacks. The
+     * engine then plays no video, which is also what it does on a desktop install with the same files
+     * missing.
+     */
+    globalThis.fheroes2FetchAnimation = async enginePath => {
+      const key = enginePath.startsWith(`${DATA_ROOT}/`) ? enginePath.slice(DATA_ROOT.length + 1) : enginePath;
+      const blob = await readAsset(key);
+
+      if (!blob) {
+        console.warn(`fheroes2: no stored bytes for ${key}`);
+        return null;
+      }
+
+      journalLazy(`bytes of ${key} handed to the engine`);
+
+      // A view rather than a copy: it is the only shape in which the buffer itself can be adopted by the
+      // file system of the engine, which for a 20 MB film is the difference between one allocation and two.
+      return new Uint8Array(await blob.arrayBuffer());
+    };
 
     /* ---------------------------------------------------------------------- *
      * Paths
@@ -1164,9 +1229,6 @@
 
     let runtimeRequested = false;
 
-    // Set by the recovery button after the browser killed a previous attempt; see the note in preRun.
-    let leanStart = false;
-
     function startRuntime() {
       if (runtimeRequested) {
         return;
@@ -1246,6 +1308,21 @@
       FS.writeFile(target, new Uint8Array(await blob.arrayBuffer()), { canOwn: true });
     }
 
+    /*
+     * An empty file for every film the page keeps out of memory, and the folders which hold them. A video
+     * the engine does not find at all is reported as missing rather than asked for, while an empty one is
+     * the sign for it to come back to this page for the bytes; see System::LoadAnimationFile. The names
+     * are what matters, so nothing is read from the store here, which is the whole point.
+     */
+    function stageAnimationPlaceholders(FS, paths, root) {
+      for (const path of paths) {
+        const target = `${root}/${path}`;
+
+        makeDirectory(FS, target.slice(0, target.lastIndexOf("/")));
+        FS.writeFile(target, new Uint8Array(0));
+      }
+    }
+
     Object.assign(globalThis, {
       Module: {
         canvas,
@@ -1318,14 +1395,23 @@
               }
 
               /*
-               * Only the aggregates are needed to reach the main menu; the maps, music and animation
-               * subtrees are most of the bytes, and it is their sum that a phone can refuse to keep
-               * resident at once. A retry after a kill therefore restores `data/` alone, which is enough
-               * to prove whether the limit was memory at all.
+               * The animation folders come into memory a film at a time, when the engine is about to play
+               * one (see fheroes2FetchAnimation), so here only the names are created: the engine finds its
+               * videos by listing the folders, so the names have to exist, but the bytes must not, because
+               * their sum is what a phone refuses. Everything else the player imported is restored in full.
+               *
+               * A start kept light by the recovery button restores everything too: the limit that button
+               * worked around was the sum of the videos, which is no longer carried into memory, and
+               * restoring less than everything would now only mean a game without its maps or its music.
                */
-              const wanted = leanStart ? paths.filter(path => path.startsWith("data/")) : paths;
+              const resident = [];
+              const deferred = [];
 
-              if (wanted.length === 0) {
+              for (const path of paths) {
+                (isAnimation(path) ? deferred : resident).push(path);
+              }
+
+              if (resident.length === 0) {
                 throw new Error("The stored game files have disappeared. Import them again.");
               }
 
@@ -1333,10 +1419,10 @@
 
               paint(bootTrack, bootBar, 0);
 
-              for (const path of wanted) {
+              for (const path of resident) {
                 // A hang on a phone has to name the file it hung on; the generic text hid whether the
                 // stall was reading from IndexedDB or copying into the engine's file system.
-                bootStatus.textContent = `Restoring game file ${++done} of ${wanted.length}: ${path}`;
+                bootStatus.textContent = `Restoring game file ${++done} of ${resident.length}: ${path}`;
 
                 const blob = await readAsset(path);
 
@@ -1349,8 +1435,14 @@
                 makeDirectory(fs, target.slice(0, target.lastIndexOf("/")));
                 await writeBlob(fs, target, blob);
 
-                paint(bootTrack, bootBar, done / wanted.length);
+                paint(bootTrack, bootBar, done / resident.length);
               }
+
+              stageAnimationPlaceholders(fs, deferred, DATA_ROOT);
+
+              // A file which had gone missing from the store would leave the bar short of the end, so it
+              // is closed here rather than left looking like a stall.
+              paint(bootTrack, bootBar, 1);
 
               bootStatus.textContent = "Starting the engine";
               finish("game-files");
@@ -1418,12 +1510,14 @@
             + " installer again to add them.";
         }
 
-        if (bytes > 250 * 1024 * 1024) {
+        if (bytes > 400 * 1024 * 1024) {
           // An advisory, so it belongs in the status line: the error slot is for failures only, and
-          // filling it with advice trains the reader to think the import went wrong.
-          gateStatus.textContent += " Large import: every stored byte is copied into the game's memory"
-            + " at each start, which a phone can refuse; if starting fails, use Forget files and import"
-            + " without the animation videos.";
+          // filling it with advice trains the reader to think the import went wrong. The animation videos
+          // are no longer part of the memory of a start, so this now only fires on an unusually large set
+          // of maps and music, for which no advice but a smaller selection exists.
+          gateStatus.textContent += " Large import: every stored byte except the animation videos is"
+            + " copied into the game's memory at each start, which a phone can refuse; if starting fails,"
+            + " use Forget files and import a smaller selection.";
         }
 
         // Importing is a genuine user gesture, the best possible moment to launch the runtime.
@@ -1545,13 +1639,13 @@
           /*
            * Safari's own crash page says nothing about the attempt, and reopening the same URL starts
            * exactly the same start-up, which is how a phone gets into a loop it cannot leave. Naming the
-           * step that was reached, and offering to start with the fewest bytes possible, is the way out:
-           * reaching the main menu with only the aggregates proves the limit was memory, and nothing else.
+           * step which was reached is the way out of the silence: it says whether the phone died while the
+           * files were being restored, while the bytes of a video were being handed over, or in the game.
            */
           gateRecover.hidden = false;
           recoverText.textContent = "The browser stopped the page before it finished. The last step it"
-            + ` reported was: ${abandoned}. If it stops again, try starting with only the core files:`
-            + " the game data, without the maps, music or animation videos.";
+            + ` reported was: ${abandoned}. Try starting again; if it stops at the same place twice, the`
+            + " memory this device gives to a page is not enough for what was being done there.";
         }
       }
       catch (error) {
@@ -1560,11 +1654,6 @@
       }
     })();
 
-    recoverButton.addEventListener("click", () => {
-      leanStart = true;
-      gateRecover.hidden = true;
-      startRuntime();
-    });
   </script>
 </body>
 
