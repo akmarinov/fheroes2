@@ -60,11 +60,44 @@
 
     #canvas {
       display: block;
+      /* The engine fits the image to whatever box it is given; see the note on the layout below. */
+      width: 100%;
+      height: 100%;
       /* The game handles every gesture itself, so the browser must not intercept any of them. */
       touch-action: none;
       -webkit-user-select: none;
       user-select: none;
       background: #000 url(./fheroes2.jpeg) center center / contain no-repeat;
+    }
+
+    /*
+     * A phone held upright gives the game a surface taller than the smallest game area, so the image is
+     * letterboxed and the interface is small. Nothing in the engine can turn the page, and the shape of
+     * the page is all a browser knows about the device, so the notice is drawn here. It must never swallow
+     * a gesture, and it must not compete with the launcher, so it only appears over a running game.
+     */
+    #rotate {
+      display: none;
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      padding: 0.45rem 0.75rem calc(0.45rem + env(safe-area-inset-bottom));
+      margin: 0;
+      text-align: center;
+      font-size: 0.85rem;
+      color: var(--accent);
+      background: rgba(0, 0, 0, 0.55);
+      pointer-events: none;
+    }
+
+    @media (orientation: portrait) and (max-width: 560px) {
+      /* The class is set once the engine has taken the page; see the status callback. A selector on the
+         shape of the markup would not work in the browsers which lack it, and a script would have to
+         follow every change of the window. */
+      #stage.running #rotate {
+        display: block;
+      }
     }
 
     .overlay {
@@ -207,6 +240,23 @@
       accent-color: var(--accent);
     }
 
+    #gate-recover {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.5rem;
+      width: min(34rem, 88vw);
+      border: 1px solid var(--border);
+      border-radius: 0.5rem;
+      padding: 0.7rem;
+      background: var(--panel);
+    }
+
+    #gate-recover .hint {
+      margin: 0;
+      opacity: 0.9;
+    }
+
     [hidden] {
       display: none !important;
     }
@@ -244,6 +294,10 @@
       <div id="gate-track" class="track" hidden><span></span></div>
       <div id="gate-status" class="status"></div>
       <div id="gate-error" class="error"></div>
+      <div id="gate-recover" hidden>
+        <p class="hint" id="recover-text"></p>
+        <button id="recover-button" type="button">Retry with only the core files</button>
+      </div>
       <p id="install-hint" class="hint">Add this page to the home screen to play fullscreen.</p>
     </div>
 
@@ -253,6 +307,8 @@
       <div id="boot-status" class="status"></div>
       <div id="boot-error" class="error"></div>
     </div>
+
+    <p id="rotate">Turn the phone sideways to use the whole screen.</p>
   </div>
 
   <script>
@@ -295,6 +351,9 @@
     const playButton = document.getElementById("play-button");
     const forgetButton = document.getElementById("forget-button");
     const installHint = document.getElementById("install-hint");
+    const gateRecover = document.getElementById("gate-recover");
+    const recoverText = document.getElementById("recover-text");
+    const recoverButton = document.getElementById("recover-button");
 
     /*
      * The engine looks up `data/*.agg`, `maps/*`, `music/*` and `anim/*` below every root directory, and
@@ -306,8 +365,6 @@
     // Configuration and saved games live under HOME, the subtree that is mounted on IndexedDB.
     const HOME_ROOT = "/fheroes2";
 
-    // Reading a resource in one gulp would duplicate a 40 MB video in the JavaScript heap.
-    const CHUNK_SIZE = 4 * 1024 * 1024;
 
     // Only these subtrees matter; the rest of a game folder is optional at runtime and can be huge.
     // A wrapper folder named after the game is deliberately not among them: it has to be stripped
@@ -322,6 +379,89 @@
 
     let store = null;
     let busy = false;
+
+    /*
+     * A phone can kill the tab itself - iOS does this when the process passes its memory budget and,
+     * unlike a web error, nothing runs inside the page when it happens: Safari just shows its own
+     * "problem repeatedly occurred" page. The only way to learn where such a death happened is a
+     * journal written through synchronously to localStorage on every visible step, which outlives the
+     * kill and is read back on the next open. `running` marks a session that died without finishing.
+     */
+    const JOURNAL_KEY = "fhe…onal";
+
+    function journalNow(text) {
+      try {
+        const previous = localStorage.getItem(JOURNAL_KEY);
+        const session = previous ? JSON.parse(previous) : { steps: [] };
+
+        session.steps.push([Math.round(performance.now()), String(text).slice(0, 200)]);
+        if (session.steps.length > 80) {
+          session.steps.shift();
+        }
+        session.alive = true;
+        localStorage.setItem(JOURNAL_KEY, JSON.stringify(session));
+      }
+      catch (storage) {
+        // A dead journal must never take the game down with it.
+      }
+    }
+
+    function journalMark(text) {
+      try {
+        const previous = localStorage.getItem(JOURNAL_KEY);
+        const session = previous ? JSON.parse(previous) : { steps: [] };
+
+        session.steps.push([Math.round(performance.now()), String(text).slice(0, 200)]);
+        session.alive = false;
+        localStorage.setItem(JOURNAL_KEY, JSON.stringify(session));
+      }
+      catch (storage) {
+        // Same.
+      }
+    }
+
+    /*
+     * A session that is still marked alive when the page opens again was killed by the browser rather
+     * than closed: nothing inside the page runs when iOS reclaims the process, so the journal is the
+     * only account of how far it got. It is read before this page starts writing its own, and the last
+     * entry names the step the phone died on - the closest thing to a crash report obtainable here.
+     */
+    let abandoned = null;
+
+    try {
+      const previous = JSON.parse(localStorage.getItem(JOURNAL_KEY) || "null");
+
+      if (previous && previous.alive && Array.isArray(previous.steps) && previous.steps.length > 0) {
+        abandoned = previous.steps[previous.steps.length - 1][1];
+      }
+
+      localStorage.removeItem(JOURNAL_KEY);
+    }
+    catch (unreadable) {
+      localStorage.removeItem(JOURNAL_KEY);
+    }
+
+    /*
+     * Rather than threading a journal call through every status update, observe the two status lines:
+     * whatever the page decides to tell the user is by definition worth knowing at the moment of a
+     * kill, and both lines already pass their text through textContent everywhere.
+     */
+    for (const line of [gateStatus, bootStatus]) {
+      new MutationObserver(mutations => {
+        for (const change of mutations) {
+          if (line.textContent) {
+            journalNow(line.textContent);
+          }
+        }
+      }).observe(line, { childList: true, characterData: true, subtree: true });
+    }
+
+    /*
+     * Closing the tab or reloading normally fires `pagehide`; a jetsam kill never gets to run any
+     * JavaScript at all. So a journal still marked alive when the page opens again is evidence of
+     * exactly that kill, and its tail is the closest thing to a crash report the page can leave.
+     */
+    window.addEventListener("pagehide", () => journalMark("the page closed"), { capture: true });
 
     /* ---------------------------------------------------------------------- *
      * Presentation
@@ -386,6 +526,7 @@
     function fail(message) {
       gate.hidden = false;
       booting.hidden = true;
+      stage.classList.remove("running");
       paint(gateTrack, gateBar, -1);
       gateStatus.textContent = "";
       gateError.textContent = describeError(message);
@@ -411,82 +552,13 @@
      * ---------------------------------------------------------------------- */
 
     /*
-     * SDL renders the game with a logical size and letterboxes the image when the canvas has another
-     * aspect ratio. Mouse coordinates are converted through that letterbox, touch coordinates are not:
-     * they are normalized against the canvas box and multiplied by the game resolution. Any mismatch
-     * therefore makes the emulated pointer land beside the finger, so the box always matches the image.
+     * The canvas fills the stage and the engine does the fitting. It keeps a logical game area, scales it
+     * to the drawing buffer with the letterboxing of SDL, and the port maps the pointer and the fingers
+     * through that viewport, so whatever is pressed is what is seen wherever the image sits inside the box.
+     * The port gives the buffer the size of the box multiplied by the scale of the display and resizes it
+     * when the window changes, and the engine counts that buffer among the modes: on a phone held sideways
+     * the game area therefore takes the aspect of the page, and no part of the screen is wasted.
      */
-    let gameAspect = canvas.width / canvas.height;
-    let appliedSize = "";
-
-    function fitCanvas() {
-      const box = stage.getBoundingClientRect();
-
-      // A collapsed stage means the page is not visible; resizing then would destroy the surface.
-      if (box.width < 16 || box.height < 16) {
-        return;
-      }
-
-      let width = box.width;
-      let height = width / gameAspect;
-
-      if (height > box.height) {
-        height = box.height;
-        width = height * gameAspect;
-      }
-
-      width = Math.floor(width);
-      height = Math.floor(height);
-
-      const key = `${width}x${height}`;
-      if (key === appliedSize) {
-        return;
-      }
-      appliedSize = key;
-
-      canvas.style.width = `${width}px`;
-      canvas.style.height = `${height}px`;
-    }
-
-    function followCanvasResolution() {
-      // The engine rewrites the size of the drawing surface whenever the resolution changes in its
-      // options dialog, and the CSS box has to follow it.
-      const sync = () => {
-        if (canvas.width < 2 || canvas.height < 2) {
-          return;
-        }
-
-        const aspect = canvas.width / canvas.height;
-        if (Math.abs(aspect - gameAspect) > 1e-3) {
-          gameAspect = aspect;
-          appliedSize = "";
-          fitCanvas();
-        }
-      };
-
-      if ("ResizeObserver" in window) {
-        new ResizeObserver(sync).observe(canvas);
-      }
-      else {
-        setInterval(sync, 250);
-      }
-
-      for (const event of ["resize", "orientationchange"]) {
-        window.addEventListener(event, () => {
-          appliedSize = "";
-          fitCanvas();
-        });
-      }
-
-      document.addEventListener("visibilitychange", () => {
-        if (!document.hidden) {
-          appliedSize = "";
-          fitCanvas();
-        }
-      });
-
-      fitCanvas();
-    }
 
     /* ---------------------------------------------------------------------- *
      * Asset store
@@ -1092,6 +1164,9 @@
 
     let runtimeRequested = false;
 
+    // Set by the recovery button after the browser killed a previous attempt; see the note in preRun.
+    let leanStart = false;
+
     function startRuntime() {
       if (runtimeRequested) {
         return;
@@ -1159,28 +1234,16 @@
       }
     }
 
+    /*
+     * The engine's file system is memory, so every stored byte also has to become a buffer, and a phone
+     * can refuse to make it. Writing in chunks is the worst shape of that: MEMFS grows a file by
+     * doubling, so a 43 MB aggregate ends up copied into and out of capacities totalling well over a
+     * hundred megabytes while the biggest file is being restored. Handing over one buffer with canOwn
+     * instead lets MEMFS adopt it at exactly its own size, which halves the peak of the largest file and
+     * removes the repeated reallocation. The buffer is dead to us afterwards, which is the contract.
+     */
     async function writeBlob(FS, target, blob) {
-      if (blob.size <= CHUNK_SIZE) {
-        FS.writeFile(target, new Uint8Array(await blob.arrayBuffer()));
-        return;
-      }
-
-      const handle = FS.open(target, "w", 0o644);
-
-      try {
-        let offset = 0;
-
-        while (offset < blob.size) {
-          const slice = blob.slice(offset, Math.min(offset + CHUNK_SIZE, blob.size));
-          const bytes = new Uint8Array(await slice.arrayBuffer());
-
-          FS.write(handle, bytes, 0, bytes.length, offset);
-          offset += bytes.length;
-        }
-      }
-      finally {
-        FS.close(handle);
-      }
+      FS.writeFile(target, new Uint8Array(await blob.arrayBuffer()), { canOwn: true });
     }
 
     Object.assign(globalThis, {
@@ -1195,9 +1258,15 @@
             return;
           }
 
-          // The runtime reports an empty status once main() has been entered.
+          // The runtime reports an empty status once main() has been entered. From here on the engine
+          // is up, so a later death is a game problem rather than a start-up one, and the journal stops
+          // claiming that this page is still on its way.
           if (!status) {
+            journalMark("the engine has started");
             booting.hidden = true;
+            // From here on the canvas is the whole of the page, so the notice about the shape of the
+            // screen is allowed to appear; see the rule which reads this class.
+            stage.classList.add("running");
             paint(bootTrack, bootBar, -1);
             return;
           }
@@ -1248,16 +1317,26 @@
                 throw new Error("The stored game files have disappeared. Import them again.");
               }
 
-              let done = 0;
-              let totalBytes = 0;
+              /*
+               * Only the aggregates are needed to reach the main menu; the maps, music and animation
+               * subtrees are most of the bytes, and it is their sum that a phone can refuse to keep
+               * resident at once. A retry after a kill therefore restores `data/` alone, which is enough
+               * to prove whether the limit was memory at all.
+               */
+              const wanted = leanStart ? paths.filter(path => path.startsWith("data/")) : paths;
 
-              bootStatus.textContent = `Restoring game files (0 of ${paths.length})`;
+              if (wanted.length === 0) {
+                throw new Error("The stored game files have disappeared. Import them again.");
+              }
+
+              let done = 0;
+
               paint(bootTrack, bootBar, 0);
 
-              for (const path of paths) {
+              for (const path of wanted) {
                 // A hang on a phone has to name the file it hung on; the generic text hid whether the
                 // stall was reading from IndexedDB or copying into the engine's file system.
-                bootStatus.textContent = `Restoring game file ${++done} of ${paths.length}: ${path}`;
+                bootStatus.textContent = `Restoring game file ${++done} of ${wanted.length}: ${path}`;
 
                 const blob = await readAsset(path);
 
@@ -1269,9 +1348,8 @@
 
                 makeDirectory(fs, target.slice(0, target.lastIndexOf("/")));
                 await writeBlob(fs, target, blob);
-                totalBytes += blob.size;
 
-                paint(bootTrack, bootBar, done / paths.length);
+                paint(bootTrack, bootBar, done / wanted.length);
               }
 
               bootStatus.textContent = "Starting the engine";
@@ -1377,16 +1455,6 @@
       }
     });
 
-    zipInput.addEventListener("change", () => {
-      const archive = zipInput.files && zipInput.files[0];
-
-      zipInput.value = "";
-      if (archive) {
-        gateStatus.textContent = "Unpacking";
-        importThenPlay(() => importArchive(archive));
-      }
-    });
-
     folderInput.addEventListener("change", () => {
       const files = [...folderInput.files].map(file => ({ name: file.webkitRelativePath || file.name, blob: file }));
 
@@ -1461,7 +1529,6 @@
         bootError.textContent = describeError(event.reason);
       }
     });
-    followCanvasResolution();
     enablePickers(true);
 
     (async () => {
@@ -1473,12 +1540,31 @@
         playButton.hidden = false;
         forgetButton.hidden = false;
         gateStatus.textContent = `${paths.length} game files stored on this device`;
+
+        if (abandoned) {
+          /*
+           * Safari's own crash page says nothing about the attempt, and reopening the same URL starts
+           * exactly the same start-up, which is how a phone gets into a loop it cannot leave. Naming the
+           * step that was reached, and offering to start with the fewest bytes possible, is the way out:
+           * reaching the main menu with only the aggregates proves the limit was memory, and nothing else.
+           */
+          gateRecover.hidden = false;
+          recoverText.textContent = "The browser stopped the page before it finished. The last step it"
+            + ` reported was: ${abandoned}. If it stops again, try starting with only the core files:`
+            + " the game data, without the maps, music or animation videos.";
+        }
       }
       catch (error) {
         // No usable store just means the game has not been imported on this device yet.
         console.warn(error);
       }
     })();
+
+    recoverButton.addEventListener("click", () => {
+      leanStart = true;
+      gateRecover.hidden = true;
+      startRuntime();
+    });
   </script>
 </body>
 

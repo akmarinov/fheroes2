@@ -177,6 +177,22 @@ Things worth knowing about iOS:
 * A phone may reclaim the memory of a backgrounded web app. Imported files and saved games are on disk and
   survive that; an interrupted battle does not.
 
+### The Size Of The Game Area
+
+A browser has no list of hardware display modes. The port reports the screen of the device in the units of
+the page and in its natural orientation, which is upright, so on a phone held sideways none of those modes
+describes the surface being drawn into. The engine therefore asks the page for the box of the canvas and
+offers a game area of its aspect ratio and of the smallest supported height: on a phone of 2532 x 1170
+pixels that is an area of 1038 x 480, which is the whole width of the screen at the same size of the
+interface as the desktop has at 640 x 480. The graphics settings offer the other areas as usual.
+
+Held upright, the page is taller than the game area and the image is letterboxed, as on any other
+platform; the launcher asks for the phone to be turned sideways.
+
+The fullscreen mode of a window has no meaning on a phone, where the page already owns the whole screen
+and the browser only grants that request from inside a gesture. The switch in the settings still remembers
+the choice, and on a desktop browser it still asks the browser for the real fullscreen mode.
+
 ### Notes For Other Browsers
 
 Desktop browsers, Android Chrome and Firefox work the same way; Chrome and Edge additionally offer their

@@ -56,6 +56,10 @@
 #if defined( __GNUC__ )
 #pragma GCC diagnostic pop
 #endif
+#if defined( __EMSCRIPTEN__ )
+// Needed for the query of the size of the drawing surface, which the port does not report through SDL.
+#include <emscripten/html5.h>
+#endif
 
 #if defined( TARGET_PS_VITA )
 #include <vita2d.h>
@@ -68,6 +72,34 @@
 
 namespace
 {
+#if defined( __EMSCRIPTEN__ )
+    // A browser has no list of hardware modes: the port reports the screen of the device in CSS pixels and
+    // in its natural orientation, so on a phone held sideways the modes SDL speaks of are taller than they
+    // are wide, and none of them describes the surface which is being drawn into. The canvas element does.
+    // The port gives the drawing buffer the size of the box of the canvas multiplied by the pixel ratio of
+    // the display, and the sizes of the two are reported in those same units, so a resolution of the buffer
+    // is what the engine has to choose from in order to fill the screen of a phone without bars.
+    std::optional<fheroes2::ResolutionInfo> GetCanvasResolution()
+    {
+        double cssWidth = 0;
+        double cssHeight = 0;
+
+        if ( emscripten_get_element_css_size( "#canvas", &cssWidth, &cssHeight ) != EMSCRIPTEN_RESULT_SUCCESS || cssWidth < 1 || cssHeight < 1 ) {
+            return {};
+        }
+
+        const double pixelRatio = emscripten_get_device_pixel_ratio();
+        if ( pixelRatio < 1 ) {
+            return {};
+        }
+
+        // The port applies the same floor when it sizes the drawing buffer of the canvas.
+        const int32_t width = static_cast<int32_t>( cssWidth * pixelRatio );
+        const int32_t height = static_cast<int32_t>( cssHeight * pixelRatio );
+
+        return fheroes2::ResolutionInfo( width, height );
+    }
+#endif
     // Returns nearest screen supported resolution
     fheroes2::ResolutionInfo GetNearestResolution( fheroes2::ResolutionInfo resolutionInfo, const std::vector<fheroes2::ResolutionInfo> & resolutions )
     {
@@ -132,7 +164,25 @@ namespace
         }
 
         if ( resolutions.empty() ) {
-            return { { fheroes2::Display::DEFAULT_WIDTH, fheroes2::Display::DEFAULT_HEIGHT } };
+            // Every mode which the platform reports is lower than the minimum the engine asks for, which
+            // happens on a screen shorter than 480 units - a small display, or a browser window dragged
+            // narrow. Letterboxing the default resolution inside such a surface would waste most of it, so
+            // offer a game area of the smallest height and of the aspect of the surface instead; the
+            // rendering scales that area to the whole of the surface, which keeps the user interface
+            // exactly as large as it is at 640 x 480 while the image reaches the edges of the screen.
+            const fheroes2::ResolutionInfo & widest
+                = *std::max_element( resolutionSet.begin(), resolutionSet.end(),
+                                     []( const fheroes2::ResolutionInfo & lhs, const fheroes2::ResolutionInfo & rhs ) { return lhs.gameWidth < rhs.gameWidth; } );
+
+            // The game area of a surface narrower than 4:3 would become narrower than the minimum as well.
+            if ( widest.gameWidth <= 0 || widest.gameHeight <= 0
+                 || widest.gameWidth * fheroes2::Display::DEFAULT_HEIGHT < widest.gameHeight * fheroes2::Display::DEFAULT_WIDTH ) {
+                return { { fheroes2::Display::DEFAULT_WIDTH, fheroes2::Display::DEFAULT_HEIGHT } };
+            }
+
+            return { { fheroes2::Display::DEFAULT_WIDTH, fheroes2::Display::DEFAULT_HEIGHT },
+                     { widest.gameWidth * fheroes2::Display::DEFAULT_HEIGHT / widest.gameHeight, fheroes2::Display::DEFAULT_HEIGHT, widest.gameWidth,
+                       widest.gameHeight } };
         }
 
         {
@@ -861,6 +911,17 @@ namespace
                 return;
             }
 
+#if defined( __EMSCRIPTEN__ )
+            // A page of a phone is already as large as the browser of the phone allows, and the size of the
+            // drawing surface belongs to the page: the request for the fullscreen mode of the window is
+            // refused outside a gesture and would resize the canvas out of the box given to it by the page.
+            // Only the flag of the engine has to move, so that the choice of the player is remembered.
+            if ( System::isHandheldDevice() ) {
+                BaseRenderEngine::toggleFullScreen();
+                return;
+            }
+#endif
+
             uint32_t flags = SDL_GetWindowFlags( _window );
             if ( flags & ( SDL_WINDOW_FULLSCREEN | SDL_WINDOW_FULLSCREEN_DESKTOP ) ) {
                 flags &= ~( SDL_WINDOW_FULLSCREEN | SDL_WINDOW_FULLSCREEN_DESKTOP );
@@ -916,6 +977,14 @@ namespace
                 return BaseRenderEngine::isFullScreen();
             }
 
+#if defined( __EMSCRIPTEN__ )
+            // The mode of the window of a page is the mode of the page, which the engine does not change on
+            // a phone, so the flag of the engine is the whole of the state of the mode.
+            if ( System::isHandheldDevice() ) {
+                return BaseRenderEngine::isFullScreen();
+            }
+#endif
+
             const uint32_t flags = SDL_GetWindowFlags( _window );
             return ( flags & ( SDL_WINDOW_FULLSCREEN | SDL_WINDOW_FULLSCREEN_DESKTOP ) );
         }
@@ -956,13 +1025,31 @@ namespace
             // 848x480 is the smallest resolution supported by fheroes2
             resolutionSet.emplace( 848, 480 );
 #endif
+
+#if defined( __EMSCRIPTEN__ )
+            // The surface being drawn into is the canvas, and the port gives it the size of the box of the
+            // element multiplied by the scale of the display. Neither that size nor the product is reported
+            // as a mode of the display, so the engine asks for it besides the modes of SDL: the game area of
+            // the aspect of the surface is the only one which reaches every edge of it.
+            if ( const std::optional<fheroes2::ResolutionInfo> canvas = GetCanvasResolution() ) {
+                resolutionSet.emplace( *canvas );
+            }
+#endif
             resolutionSet = FilterResolutions( resolutionSet );
 
             if ( displayCount < 1 ) {
                 return std::vector<fheroes2::ResolutionInfo>{ resolutionSet.rbegin(), resolutionSet.rend() };
             }
 
-            if ( !shouldUseFullscreenDesktopMode() ) {
+            if ( !shouldUseFullscreenDesktopMode()
+#if defined( __EMSCRIPTEN__ )
+                 // The port reports the screen of the device in the units of the page, which do not bound
+                 // the drawing surface: the surface is the box of the element multiplied by the scale of the
+                 // display, and it is larger than the screen of the device on a phone. Limiting the modes to
+                 // the former would remove the only one which fills the latter.
+                 || System::isHandheldDevice()
+#endif
+            ) {
                 // If software emulation is not enabled it means that we need to use resolutions supported
                 // by the hardware.
                 return std::vector<fheroes2::ResolutionInfo>{ resolutionSet.rbegin(), resolutionSet.rend() };
@@ -1204,7 +1291,14 @@ namespace
             flags |= SDL_WINDOW_ALLOW_HIGHDPI;
 #endif
             if ( isFullScreen ) {
-#if defined( _WIN32 )
+#if defined( __EMSCRIPTEN__ )
+                // On a phone the page owns the drawing surface; see the note on the switching of the mode.
+                // Elsewhere the request is honored by the browser of the desktop and keeps the window over
+                // the toolbars of the browser.
+                if ( !System::isHandheldDevice() ) {
+                    flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
+                }
+#elif defined( _WIN32 )
                 // We force fullscreen at desktop resolution for nearest scaling to disable hardware scaling of game resolution by the monitor.
                 if ( isNearestScaling() || fheroes2::cursor().isSoftwareEmulation() ) {
                     flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;

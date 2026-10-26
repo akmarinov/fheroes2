@@ -63,7 +63,10 @@
 #endif
 
 #if defined( __EMSCRIPTEN__ )
-#include <emscripten.h>
+// Needed for the query of the size of the box of the canvas, which the port does not report through SDL.
+#include <emscripten/html5.h>
+
+#include "screen.h"
 
 namespace
 {
@@ -85,6 +88,21 @@ namespace
 #endif
 
         return touchPoints;
+    }
+
+    // The size of the drawing surface in the units of the page, which is what the player sees. The port
+    // keeps the buffer of the canvas equal to this size multiplied by the scale of the display, so the
+    // height of the box says how much of the screen the player has to fill with the interface.
+    bool browserIsShorterThanDefaultResolution()
+    {
+        double cssWidth = 0;
+        double cssHeight = 0;
+
+        if ( emscripten_get_element_css_size( "#canvas", &cssWidth, &cssHeight ) != EMSCRIPTEN_RESULT_SUCCESS ) {
+            return false;
+        }
+
+        return cssHeight < fheroes2::Display::DEFAULT_HEIGHT;
     }
 }
 #endif
@@ -292,6 +310,13 @@ bool System::isHandheldDevice()
 {
 #if defined( ANDROID ) || defined( __IPHONEOS__ )
     return true;
+#elif defined( __EMSCRIPTEN__ )
+    // A browser cannot report the kind of hardware underneath it, so the shape of the page decides
+    // whether the interface has to fit a small screen. A page shorter than the smallest game area is a
+    // phone held sideways: every control on it is out of reach until the player enlarges it, so the
+    // defaults of a handheld apply - the widest game area of the smallest height rather than the list
+    // of desktop resolutions, and the map moved by dragging a finger instead of by a mouse wheel.
+    return browserMaxTouchPoints() > 0 && browserIsShorterThanDefaultResolution();
 #else
     return false;
 #endif
