@@ -109,6 +109,7 @@ origin: opening `index.html` from a file share does not work. For local testing,
 ```sh
 script/pwa/build.sh        # assembles build/pwa, brotli and gzip copies included
 script/pwa/serve.py build/pwa --port 8080
+script/pwa/serve.py build/pwa --host 192.168.1.5 --port 8080 --tls   # also answer HTTPS on 8443
 ```
 
 The development server exists because a plain static server gets two things wrong: the wasm binary has to
@@ -123,6 +124,10 @@ bytes. The same applies to any other web server:
   practical on a phone.
 * `sw.js` has to be served with `Cache-Control: no-cache`. A service worker that is not revalidated is
   only updated once the browser gives up polling for it, which on iOS can take a day.
+* Nothing in the assembled directory may be cached without revalidating. The names do not change between
+  builds, so a response marked `immutable` pins a phone to one engine, and a newer launcher paired with an
+  older engine reads the films of the previous build as corrupt. `serve.py` answers every file it has with
+  `no-cache` for that reason.
 
 `script/pwa/build.sh` names the cache of the service worker after a digest of the payload, so an updated
 site is picked up by itself while a rebuild of unchanged sources does not make anybody download anything
@@ -193,6 +198,22 @@ a video of an expansion the player does not own.
 The build is a progressive web app: serve it over HTTPS, open it in Safari, use the Share button and
 *Add to Home Screen*. Afterwards it starts without the browser interface, keeps the engine and the game
 files offline and is not fetched from the network on every launch.
+
+HTTPS is not a preference on iOS: a page reached over plain HTTP at a LAN address is not a secure origin,
+so `navigator.serviceWorker` is absent outright. Such a page still plays, but it downloads the engine on
+every launch and keeps the imported files in storage the system feels free to reclaim, which is how a phone
+ends up back at the file picker. `--tls` on the development server mints a private root and a certificate
+for the address it was given, keeps the keys in the user cache directory, and offers the root for download
+at its own address; a phone has to be told to trust it once:
+
+1. Start the server with `--host` set to the address the phone can reach, and `--tls`.
+2. On the phone, open the `.cer` address the server prints and install the downloaded profile.
+3. Turn it on in Settings, General, About, Certificate Trust Settings.
+4. Open the `https` address and add it to the home screen.
+
+The root is shared by every address, so a new lease on the Mac costs a new certificate and no further
+trusting. Certificates handed out this way are refused by iOS if they are valid for longer than 825 days,
+which is why the leaf expires in 820.
 
 Things worth knowing about iOS:
 
