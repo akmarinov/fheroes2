@@ -5,7 +5,16 @@
   <meta charset="utf-8">
   <title>fheroes2</title>
   <meta name="viewport" content="width=device-width, height=device-height, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-  <meta name="theme-color" content="#171310">
+  <!--
+    iOS paints the strip it keeps for the clock and battery with the colour of the page, and on iOS 26.1+
+    there is no way for a web app to take those pixels back: `display: fullscreen` is not honoured, and
+    `black-translucent` is deprecated with no drawing under the status bar (WebKit 301994, 317153). The
+    strip is therefore unavoidable; being the same black as the letterboxing of the game is not. The engine
+    clears the area around the game area to pure black (screen.cpp), so the colour the band is painted with
+    has to match that rather than the brown paper of the launcher, or a game which fills the screen reads as
+    a page which stops short of the edge.
+  -->
+  <meta name="theme-color" content="#000000">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -38,7 +47,10 @@
       overflow: hidden;
       /* Without this a two-finger gesture drags the whole page around on iOS. */
       overscroll-behavior: none;
-      background: var(--background);
+      /* The surround of the game surface, not the launcher: see the note on the theme colour above. The
+         overlays paint their own brown, so the launcher is untouched and this shows only where no overlay
+         and no canvas is - the strip iOS reserves for itself, and the letterboxing around a game. */
+      background: #000;
       color: var(--foreground);
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Ubuntu, Cantarell, sans-serif;
       -webkit-tap-highlight-color: transparent;

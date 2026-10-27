@@ -241,6 +241,13 @@ Things worth knowing about iOS:
 * Whether the bytes of a session survive being killed outright is up to the browser. The journal is written
   synchronously, and WebKit has it on disk; a browser which batches such writes can lose the last few steps.
   This only ever costs detail from an account of a death, never the game itself.
+* The strip iOS keeps for its clock and battery is not the page's to draw on: since iOS 26.1 a Home Screen
+  web app gets no pixels under that strip (WebKit 301994, 317153), `display: fullscreen` is not honoured on
+  iOS, and `black-translucent` is deprecated with the same effect. iOS paints the strip with the colour of the
+  page instead, so the theme colour and the background of the page are black -- the colour the engine clears
+  around the game area to -- and the reserved band reads as the letterboxing of a film rather than as a page
+  which stops short of the edge. What stays the colour of old paper is the launcher, which paints its own
+  background over the whole surface it is given.
 
 ### The Size Of The Game Area
 
