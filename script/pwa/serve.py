@@ -20,9 +20,11 @@ mimetypes.add_type("application/wasm", ".wasm")
 mimetypes.add_type("application/manifest+json", ".webmanifest")
 mimetypes.add_type("application/javascript", ".js")
 
-# Only content whose fingerprint cannot change under the same name may be cached forever: the assets
-# carrying the revision in the worker are requested by URL, everything else has to be revalidated.
-IMMUTABLE_SUFFIXES = (".wasm", ".data", ".png", ".jpg", ".jpeg")
+# Nothing in the assembled directory may be cached without revalidating: build.sh writes the same names
+# every time, so `fheroes2.wasm` of the next build is a different file under the same URL, and a response
+# marked immutable would pin a phone to the engine of an old build - which pairs badly with a launcher
+# that stages the videos differently (see docs/README_emscripten.md). The worker keeps whole builds under
+# a name derived from their digest and always refetches them, so long max-age here buys nothing.
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -52,17 +54,11 @@ class Handler(SimpleHTTPRequestHandler):
         # Every answer below depends on the request headers, compressed or not.
         self.send_header("Vary", "Accept-Encoding")
 
-        # An error response never reaches send_head(), so the fields set there may be missing. The
-        # worker has to be revalidated on every navigation, or an update is only picked up once the
-        # browser gives up polling for it, which on iOS can take a day; anything named after a
-        # revision of the build may be kept for a year.
-        origin = getattr(self, "logical_path", self.path)
-
-        if origin.startswith("/sw.js"):
-            self.send_header("Cache-Control", "no-cache")
-        elif origin.endswith(IMMUTABLE_SUFFIXES):
-            self.send_header("Cache-Control", "public, max-age=31536000, immutable")
-        elif os.path.isfile(self.translate_path(self.path)):
+        # Everything which exists is revalidated. The names of the build do not carry a fingerprint, so
+        # no response here may be kept without asking: a phone which cached the engine of one build under
+        # `immutable` would boot it beside the launcher of the next, and the two are only safe as a pair.
+        # The worker answers the repeat visits out of its own cache, so revalidation costs little.
+        if os.path.isfile(self.translate_path(getattr(self, "logical_path", self.path))):
             self.send_header("Cache-Control", "no-cache")
 
         super().end_headers()

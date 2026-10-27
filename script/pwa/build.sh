@@ -62,9 +62,11 @@ digest=$(digest_of "$out"/fheroes2.js "$out"/fheroes2.wasm "$out"/fheroes2.data 
 
 version="$revision-$digest"
 
-# The worker has to be versioned before it is compressed, otherwise a new release would keep serving
-# the assets of the previous one out of the cache.
+# Both files carry the same string: the worker to name its cache with, the page to show its occupant which
+# build they are looking at. The digest is computed over the copies before this substitution, so stamping
+# the page cannot change the version it reports.
 sed "s/__FH2_VERSION__/$version/" "$out"/sw.js >"$out"/sw.js.tmp && mv "$out"/sw.js.tmp "$out"/sw.js
+sed "s/__FH2_VERSION__/$version/" "$out"/index.html >"$out"/index.html.tmp && mv "$out"/index.html.tmp "$out"/index.html
 
 # Images are already compressed, so only the code, the data bundle and the documents are worth
 # transforming. A server that prefers one encoding over the other picks the matching sidecar.

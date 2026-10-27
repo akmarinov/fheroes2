@@ -103,6 +103,25 @@ namespace
     }
 #endif
 }
+#if defined( __EMSCRIPTEN__ )
+/*
+ * Whether this engine can come back to the page for the bytes of a film.
+ *
+ * The launcher creates an empty file for every film it keeps out of memory, and an empty file is what this
+ * engine reads as an offer to fetch it. A launcher paired with an engine which cannot fetch - the browser
+ * kept the binary of an older build while the page is new, which is exactly what a long-lived cache on the
+ * wasm binary invites - would then hand that engine a film of no bytes at all, and the video layer reports
+ * a file of fewer than 56 bytes as corrupted, throwing instead of ignoring it. So the launcher asks before
+ * it stages anything: the presence of this symbol is the answer, and a build without it is treated as one
+ * which must be given real files or none. The keepalive attribute is what puts it in the exports of the
+ * module: listing it under EXPORTED_FUNCTIONS instead would replace the default list of the link step,
+ * of which `main` is a part.
+ */
+extern "C" EMSCRIPTEN_KEEPALIVE int System_CanFetchAnimation()
+{
+    return 1;
+}
+#endif
 
 bool System::LoadAnimationFile( const std::string & filePath )
 {

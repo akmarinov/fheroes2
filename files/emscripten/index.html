@@ -262,6 +262,20 @@
       opacity: 0.9;
     }
 
+    #update-hint {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      opacity: 0.9;
+    }
+
+    #update-hint button {
+      font-size: 0.8rem;
+      min-height: 0;
+      padding: 0.3rem 0.7rem;
+    }
+
     [hidden] {
       display: none !important;
     }
@@ -303,6 +317,11 @@
         <p class="hint" id="recover-text"></p>
       </div>
       <p id="install-hint" class="hint">Add this page to the home screen to play fullscreen.</p>
+      <p id="build-id" class="hint"></p>
+      <p id="update-hint" class="hint" hidden>
+        A newer build is available.
+        <button id="update-button" type="button">Reload now</button>
+      </p>
     </div>
 
     <div id="booting" class="overlay" hidden>
@@ -357,6 +376,20 @@
     const installHint = document.getElementById("install-hint");
     const gateRecover = document.getElementById("gate-recover");
     const recoverText = document.getElementById("recover-text");
+    const buildId = document.getElementById("build-id");
+    const updateHint = document.getElementById("update-hint");
+    const updateButton = document.getElementById("update-button");
+
+    /*
+     * The revision of this page, replaced by script/pwa/build.sh with the same string which names the cache
+     * of the worker. It is on screen because a phone which keeps failing looks identical whether the fix
+     * arrived or the device is still running the build of last week out of its own cache, and the answer to
+     * that question is the first thing worth knowing about any report.
+     */
+    const BUILD_TOKEN = "__FH2_VERSION__";
+
+    // Served straight from the source tree, the token is still there and no revision is known.
+    const BUILD = BUILD_TOKEN.startsWith("__") ? "unbuilt" : BUILD_TOKEN;
 
     /*
      * The engine looks up `data/*.agg`, `maps/*`, `music/*` and `anim/*` below every root directory, and
@@ -402,14 +435,33 @@
      * unlike a web error, nothing runs inside the page when it happens: Safari just shows its own
      * "problem repeatedly occurred" page. The only way to learn where such a death happened is a
      * journal written through synchronously to localStorage on every visible step, which outlives the
-     * kill and is read back on the next open. `running` marks a session that died without finishing.
+     * kill and is read back on the next open. `alive` marks a session that died without finishing.
+     *
+     * The keys this page keeps in local storage are spelled out in full and in ASCII, in the interest of
+     * anybody grepping for them: both carried a typographic ellipsis in the middle for a while, which reads
+     * as an omission rather than as a name. Whatever is stored under those old names is adopted below
+     * rather than abandoned, so a device which has already died once still has its account of it.
      */
-    const JOURNAL_KEY = "fhe…onal";
+    const JOURNAL_KEY = "fheroes2-session-journal";
+    const JOURNAL_KEY_OLD = "fhe\u2026onal";
+
+    /*
+     * The journal of the session being written, with the build recorded on it. Every death the page cannot
+     * report itself is read back from this object, and whether the fix had reached the phone is the first
+     * question about any of them.
+     */
+    function journalSession() {
+      const previous = localStorage.getItem(JOURNAL_KEY);
+      const session = previous ? JSON.parse(previous) : { steps: [] };
+
+      session.build = BUILD;
+
+      return session;
+    }
 
     function journalNow(text) {
       try {
-        const previous = localStorage.getItem(JOURNAL_KEY);
-        const session = previous ? JSON.parse(previous) : { steps: [] };
+        const session = journalSession();
 
         session.steps.push([Math.round(performance.now()), String(text).slice(0, 200)]);
         if (session.steps.length > 80) {
@@ -425,8 +477,7 @@
 
     function journalMark(text) {
       try {
-        const previous = localStorage.getItem(JOURNAL_KEY);
-        const session = previous ? JSON.parse(previous) : { steps: [] };
+        const session = journalSession();
 
         session.steps.push([Math.round(performance.now()), String(text).slice(0, 200)]);
         session.alive = false;
@@ -445,8 +496,7 @@
      */
     function journalLazy(text) {
       try {
-        const previous = localStorage.getItem(JOURNAL_KEY);
-        const session = previous ? JSON.parse(previous) : { steps: [] };
+        const session = journalSession();
 
         session.steps.push([Math.round(performance.now()), String(text).slice(0, 200)]);
         if (session.steps.length > 80) {
@@ -463,21 +513,28 @@
      * A session that is still marked alive when the page opens again was killed by the browser rather
      * than closed: nothing inside the page runs when iOS reclaims the process, so the journal is the
      * only account of how far it got. It is read before this page starts writing its own, and the last
-     * entry names the step the phone died on - the closest thing to a crash report obtainable here.
+     * entry names the step the phone died on - the closest thing to a crash report obtainable here. The
+     * build which wrote it is recorded too, since whether the fix had arrived is the first question
+     * about any death, and a phone can keep playing a cached build for a day after it was replaced.
      */
     let abandoned = null;
+    let abandonedBuild = null;
 
     try {
-      const previous = JSON.parse(localStorage.getItem(JOURNAL_KEY) || "null");
+      // Either name may hold the account of the last session, depending on which build wrote it.
+      const previous = JSON.parse(localStorage.getItem(JOURNAL_KEY) || localStorage.getItem(JOURNAL_KEY_OLD) || "null");
 
       if (previous && previous.alive && Array.isArray(previous.steps) && previous.steps.length > 0) {
         abandoned = previous.steps[previous.steps.length - 1][1];
+        abandonedBuild = previous.build || null;
       }
 
       localStorage.removeItem(JOURNAL_KEY);
+      localStorage.removeItem(JOURNAL_KEY_OLD);
     }
     catch (unreadable) {
       localStorage.removeItem(JOURNAL_KEY);
+      localStorage.removeItem(JOURNAL_KEY_OLD);
     }
 
     /*
@@ -681,6 +738,148 @@
       });
     }
 
+    /*
+     * Every record of an import goes in through this. A browser which refuses one says only that the quota
+     * is done with, which on a phone is the whole story except for which file it was - and the progress
+     * line that names it has moved on by the time the message is read, so the name goes into the error.
+     */
+    async function storeGameFile(path, blob) {
+      try {
+        await putAsset(path, blob);
+      }
+      catch (error) {
+        error.message = `${error.message} Refused while storing ${path}, ${Math.round(blob.size / (1024 * 1024))} MB.`;
+        throw error;
+      }
+    }
+
+    /*
+     * One marker in localStorage, saying that no record of the store was written by a build which could
+     * store a window of the archive the player picked. It is written by an import into an empty store, and
+     * by the scan below once a store has been looked through.
+     *
+     * The name is plain ASCII and spelled out in full. The name this first shipped under held a typographic
+     * ellipsis in the middle, which reads as an omission rather than as a name - and whatever a device
+     * holds under it is discarded rather than honoured, not for the spelling but for what wrote it: the
+     * builds which used that name are the ones which believed they had repaired a store of windows, and
+     * claimed so, while replacing every record of it with the head of the archive. A marker left by one of
+     * them is a claim that cannot be trusted, and the scan has to run again.
+     */
+    const STORE_FORMAT_KEY = "fheroes2-store-format";
+    const STORE_FORMAT_KEYS_SUPERSEDED = ["fhe\u2026rmat"];
+    const STORE_FORMAT_OWNED = "owned";
+
+    function markStoreOwned() {
+      localStorage.setItem(STORE_FORMAT_KEY, STORE_FORMAT_OWNED);
+
+      for (const superseded of STORE_FORMAT_KEYS_SUPERSEDED) {
+        localStorage.removeItem(superseded);
+      }
+    }
+
+    function storeIsOwned() {
+      // Whatever the superseded names hold is dropped on the way past, so the scan is not run again for
+      // them on the next start either; only this build's own marker is ever honoured.
+      for (const superseded of STORE_FORMAT_KEYS_SUPERSEDED) {
+        localStorage.removeItem(superseded);
+      }
+
+      return localStorage.getItem(STORE_FORMAT_KEY) === STORE_FORMAT_OWNED;
+    }
+
+    /*
+     * Records which are windows into an archive the player no longer has.
+     *
+     * Builds before this one stored an entry of a ZIP which needed no unpacking as `archive.slice(a, b)`:
+     * a reference to the archive the player picked rather than bytes of its own. Two things follow, and
+     * both were measured on WebKit rather than reasoned about.
+     *
+     * The first is cost. WebKit charges a slice against the file behind it, so a real import - 375 records
+     * of a 310 MB archive - cost 109 GB on disk for 310 MB of game.
+     *
+     * The second is worse, and is why the pass this replaces has been deleted rather than fixed: once the
+     * page which stored such a record is gone, the browser hands back the *beginning of the archive* at the
+     * size of the record. Every record of such a store therefore decodes to the same wrong bytes, and the
+     * offset it was taken at is not stored anywhere, so there is nothing to repair it with. Reading one
+     * whole is also how a phone dies - the request is for the entire archive, which is the allocation iOS
+     * answers by taking the page away. Any pass which read records back would both corrupt the store and
+     * kill the tab, which is exactly what a device sitting on this layout reported: the same crash page,
+     * however many times it was reloaded.
+     *
+     * So the store is only looked at, never rewritten. A record which is a window reports itself by its
+     * first four bytes: the game files live under `data`, `maps`, `music` and `anim`, none of which begin
+     * with the signature of a ZIP archive, while every window begins with that of the archive it was cut
+     * from. Four bytes per record is also the only read a store of them survives: measured on the real
+     * game archive, eight records were classified in hundredths of a second and the disk did not move.
+     */
+    const ARCHIVE_MAGIC = [0x50, 0x4b, 0x03, 0x04];
+
+    async function scanStore(report) {
+      const paths = await listAssets();
+      const windows = [];
+      let unreadable = 0;
+
+      for (const path of paths) {
+        if (report) {
+          report(`Checking stored game file ${windows.length + unreadable + 1} of ${paths.length}`);
+        }
+
+        try {
+          const blob = await readAsset(path);
+
+          if (!blob) {
+            continue;
+          }
+
+          // Only the signature is taken. Asking the record for more is what asks for the whole archive.
+          const head = new Uint8Array(await blob.slice(0, ARCHIVE_MAGIC.length).arrayBuffer());
+
+          if (ARCHIVE_MAGIC.every((byte, index) => head[index] === byte)) {
+            windows.push(path);
+          }
+        }
+        catch (unreadableRecord) {
+          console.warn(`fheroes2: stored file ${path} could not be read`, unreadableRecord);
+          ++unreadable;
+        }
+      }
+
+      return { total: paths.length, windows, unreadable };
+    }
+
+    /*
+     * Whether the store of this device is known good, and if it is not, what to say about it.
+     *
+     * The scan runs once per device: a store which passes is marked, and a store made by this build is
+     * marked as it is filled. It matters that the marker gates the scan and not merely speeds it up,
+     * because the signature test is a test of what an older build could produce - a game folder which
+     * happened to hold an actual archive under `data/` would be reported by it, and on a store this build
+     * wrote there is no such thing to report.
+     */
+    async function requireStoreIntact(report) {
+      if (storeIsOwned()) {
+        return;
+      }
+
+      const { total, windows, unreadable } = await scanStore(report);
+
+      if (windows.length > 0 || unreadable > 0) {
+        const first = windows.length > 0 ? windows[0] : "one the browser would not hand back";
+        const howMany = windows.length + unreadable;
+
+        throw new Error(
+          `${howMany} of the ${total} game files on this device, starting with ${first}, are references`
+          + " into the archive they were imported from instead of copies of themselves. Those files were"
+          + " written by an older build, and the bytes they point at are gone with the archive, so the game"
+          + " cannot be started from them. Forget the files and import the game again; this build stores"
+          + " each file as bytes of its own, so it will not happen again."
+        );
+      }
+
+      markStoreOwned();
+    }
+
+
     async function listAssets() {
       const database = await openStore();
 
@@ -824,7 +1023,7 @@
 
       for (const entry of relevant) {
         gateStatus.textContent = `Storing game file ${++done} of ${relevant.length}: ${entry.path}`;
-        await putAsset(entry.path, entry.blob);
+        await storeGameFile(entry.path, entry.blob);
         storedBytes += entry.blob.size;
         paint(gateTrack, gateBar, done / relevant.length);
       }
@@ -979,11 +1178,35 @@
       return 30 + header.getUint16(26, true) + header.getUint16(28, true);
     }
 
+    /*
+     * A window of the archive has to become bytes of its own before it is stored.
+     *
+     * A Blob which is a slice of a picked file owns nothing: it is a reference into the file behind it.
+     * WebKit writes the whole of that file again for every record which points at it - measured with the
+     * real game data, 375 records of a 310 MB archive cost 109 GB on disk, where the same 375 records
+     * built out of chunks cost 310 MB. Worse, once the page which stored such a record is gone the bytes
+     * it hands back are the beginning of the archive rather than the window (see scanStore), so a record
+     * of that shape is not merely expensive, it is wrong. No record may be left pointing at the archive.
+     *
+     * Reading the window through a Response gives a Blob of its own at the size of the window, streamed
+     * rather than materialised, so the peak stays at one entry rather than one entry plus a copy of it.
+     * Verified on WebKit: records built this way still hold their own bytes on the next visit.
+     *
+     * This is for a window of a file the player has just picked, and only for that. Given a record read
+     * back out of the store, WebKit's stream is the stream of the file behind the record rather than of
+     * the record, and the same call turns one game file into a copy of the whole archive; measured, a
+     * 1 MB window came back as the 40 MB file it was cut from. Anything which reads a record has to leave
+     * it alone.
+     */
+    function ownedBlob(payload) {
+      return new Response(payload.stream()).blob();
+    }
+
     // Stored and deflated are the only methods an archiver uses for game data. Anything else, notably
     // the bzip2 or zstd variants, is rejected rather than silently producing unusable resources.
     async function inflate(payload, method, expectedSize) {
       if (method === 0) {
-        return payload;
+        return ownedBlob(payload);
       }
 
       if (method !== 8) {
@@ -1073,7 +1296,7 @@
         const payload = archive.slice(entry.localOffset + header, entry.localOffset + header + entry.compressedSize);
         const blob = await inflate(payload, entry.method, entry.uncompressedSize);
 
-        await putAsset(path, blob);
+        await storeGameFile(path, blob);
         storedBytes += blob.size;
         paint(gateTrack, gateBar, done / relevant.length);
       }
@@ -1171,7 +1394,7 @@
 
           const blob = await work();
 
-          await putAsset(storeAs(name), blob);
+          await storeGameFile(storeAs(name), blob);
           storedBytes += blob.size;
           done += blob.size;
           paint(gateTrack, gateBar, total > 0 ? done / total : 1);
@@ -1274,6 +1497,7 @@
         console.warn("Audio is unavailable:", error);
       }
 
+      // The store has already been looked at, on the gate, before this point was reachable.
       // Loading the glue is what starts compilation and streaming of the wasm binary.
       const script = document.createElement("script");
 
@@ -1313,7 +1537,21 @@
      * the engine does not find at all is reported as missing rather than asked for, while an empty one is
      * the sign for it to come back to this page for the bytes; see System::LoadAnimationFile. The names
      * are what matters, so nothing is read from the store here, which is the whole point.
+     *
+     * Only for an engine which can answer that sign. The symbol below is what a build which can come back
+     * to the page exports, and a page newer than the engine it is paired with - a partially updated cache,
+     * which is what a long-lived entry on the wasm binary invites - would otherwise offer placeholders to
+     * an engine that reads them as films of no bytes at all, and the video layer reports a film of fewer
+     * than 56 bytes as corrupted, throwing. The other pairing, an older page with a newer engine, is safe
+     * by itself: files written in full are read as files which are already there.
      */
+    function engineCanFetchAnimations() {
+      const runtime = globalThis.Module || {};
+
+      return typeof globalThis._System_CanFetchAnimation === "function"
+        || typeof runtime._System_CanFetchAnimation === "function";
+    }
+
     function stageAnimationPlaceholders(FS, paths, root) {
       for (const path of paths) {
         const target = `${root}/${path}`;
@@ -1438,7 +1676,23 @@
                 paint(bootTrack, bootBar, done / resident.length);
               }
 
-              stageAnimationPlaceholders(fs, deferred, DATA_ROOT);
+              if (deferred.length > 0) {
+                if (engineCanFetchAnimations()) {
+                  stageAnimationPlaceholders(fs, deferred, DATA_ROOT);
+                }
+                else {
+                  /*
+                   * An engine without the fetch: the films are left out of its file system altogether
+                   * rather than staged empty. Written in full they would put the whole animation folder
+                   * back into the memory of the start, which is the limit this page exists to avoid;
+                   * staged empty they would be read as corrupt films, and a corrupt film is an exception
+                   * the game does not survive. Without them the game plays its story without the videos,
+                   * which is what a desktop install with no animation folder does.
+                   */
+                  journalLazy(`${deferred.length} animation files left out: the engine cannot fetch them`);
+                  bootStatus.textContent = "The animation videos need a newer engine and are left out";
+                }
+              }
 
               // A file which had gone missing from the store would leave the bar short of the end, so it
               // is closed here rather than left looking like a stall.
@@ -1495,10 +1749,33 @@
       gateStatus.textContent = "Reading";
 
       try {
+        /*
+         * Whether the device already had files, remembered before the import: a store which starts out
+         * empty can only hold records this build wrote, and every one of them holds bytes of its own,
+         * which is the whole content of the claim made below. A store which already had something may
+         * still hold records of an older build, and has to be looked through.
+         */
+        const hadStore = (await listAssets()).length > 0;
         const result = await withWakeLock(work);
         const count = typeof result === "object" && result ? result.count : result;
         const bytes = typeof result === "object" && result ? result.bytes : 0;
         const mebibytes = Math.round(bytes / (1024 * 1024));
+
+        /*
+         * Whether the store can be started from. An import into a store which already had files replaces
+         * the files it named and leaves the rest, so a device left by a build which stored windows is
+         * still left by one after a re-import: the check has to look at everything, not at what was just
+         * written. A device which started from nothing can only hold records this build wrote, and every
+         * one of those holds bytes of its own, which is what the marker is for.
+         */
+        if (hadStore) {
+          await requireStoreIntact(text => {
+            gateStatus.textContent = text;
+          });
+        }
+        else {
+          markStoreOwned();
+        }
 
         gateStatus.textContent = `${count} game files (${mebibytes} MB) stored on this device`;
         paint(gateTrack, gateBar, 1);
@@ -1599,9 +1876,34 @@
     // build served without the worker, for instance from a file share, has to keep working.
     const secured = location.protocol === "https:" || location.hostname === "localhost" || location.hostname === "127.0.0.1";
 
-    if ("serviceWorker" in navigator && secured) {
+    buildId.textContent = `build ${BUILD}`;
+
+    // The object rather than the property: a browser can expose `serviceWorker` as a name and still hand
+    // back nothing at all, which is what a page running inside a web view without one does.
+    const worker = secured ? navigator.serviceWorker : null;
+
+    if (worker) {
       window.addEventListener("load", () => {
-        navigator.serviceWorker.register("./sw.js").catch(error => console.warn("Offline mode is unavailable:", error));
+        worker.register("./sw.js").catch(error => console.warn("Offline mode is unavailable:", error));
+      });
+
+      /*
+       * The worker announces the build it has just taken over for. A page keeps running the launcher it was
+       * loaded with no matter what the worker has cached since, so the only honest response to a different
+       * version is to say so and let the player reload when it suits them: a phone left on an old launcher
+       * paired with a newer engine is the one combination which cannot be reasoned about afterwards.
+       */
+      worker.addEventListener("message", event => {
+        const message = event.data;
+
+        // A page with no revision of its own cannot judge another one, so it stays quiet.
+        if (BUILD !== "unbuilt" && message && message.type === "updated" && message.version !== BUILD) {
+          updateHint.hidden = false;
+        }
+      });
+
+      updateButton.addEventListener("click", () => {
+        window.location.reload();
       });
     }
 
@@ -1625,33 +1927,85 @@
     });
     enablePickers(true);
 
+    /*
+     * The account of a session which did not finish, for whoever opens the page after it. Naming the step
+     * which was reached is the way out of the silence of a crash page: it says whether the phone died while
+     * the files were being unpacked or restored, while the bytes of a video were being handed over, or in
+     * the game - and each of those has a different answer.
+     */
+    function reportAbandonedSession(startable) {
+      if (!abandoned) {
+        return;
+      }
+
+      gateRecover.hidden = false;
+
+      // The build is named because the question "did the fix arrive?" is answered here rather than anywhere
+      // else: a death recorded on an older build, on a page which has since been replaced, means the phone
+      // has not tried the new one yet.
+      const where = abandonedBuild && abandonedBuild !== BUILD
+        ? `on build ${abandonedBuild}, which this page is not`
+        : `on this build`;
+
+      // What to do next depends on whether this page has a game to start at all.
+      const again = startable ? "Try starting again" : "Import the game files again";
+
+      recoverText.textContent = "The browser stopped the page before it finished. The last step it"
+        + ` reported, ${where}, was: ${abandoned}. ${again}; if it stops at the same place`
+        + " twice, the memory this device gives to a page is not enough for what was being done there.";
+    }
+
+    /*
+     * What the gate says about a device which already has files. A store left by an older build can hold
+     * records which point at an archive the player no longer has; Play would then hand the engine those
+     * bytes, and on a phone that is a crash with nothing said about it. This is the place to find out,
+     * before anything has been asked of the engine's memory, and the scan of four bytes per file is quick
+     * enough to run here on every device which has not already been marked as known good.
+     */
     (async () => {
+      let paths = [];
+
       try {
-        const paths = await listAssets();
-
+        paths = await listAssets();
         requireMandatory(paths);
+      }
+      catch (nothingStored) {
+        // No usable store just means the game has not been imported on this device yet: the gate is then
+        // simply an empty one. A death is still worth reporting from here - a phone killed part-way through
+        // its first import reopens with nothing stored and no account of itself, and a player who is told
+        // nothing beyond "pick your files again" has no way to know the phone ran out of memory halfway.
+        console.warn(nothingStored);
+        reportAbandonedSession(false);
 
-        playButton.hidden = false;
+        return;
+      }
+
+      gateStatus.textContent = `Checking ${paths.length} game files stored on this device`;
+
+      try {
+        await requireStoreIntact();
+      }
+      catch (damaged) {
+        /*
+         * A store this build cannot start from is not the same as no store at all, and has to be said out
+         * loud rather than logged: the alternative is a Play button which crashes the page on every press,
+         * which is how a phone ends up in a loop it cannot leave. Forget is left visible because it is the
+         * way out - the record of what was stored has to go before a fresh import can be trusted.
+         */
+        gateStatus.textContent = "";
+        gateError.textContent = describeError(damaged);
         forgetButton.hidden = false;
-        gateStatus.textContent = `${paths.length} game files stored on this device`;
+        enablePickers(true);
+        reportAbandonedSession(false);
 
-        if (abandoned) {
-          /*
-           * Safari's own crash page says nothing about the attempt, and reopening the same URL starts
-           * exactly the same start-up, which is how a phone gets into a loop it cannot leave. Naming the
-           * step which was reached is the way out of the silence: it says whether the phone died while the
-           * files were being restored, while the bytes of a video were being handed over, or in the game.
-           */
-          gateRecover.hidden = false;
-          recoverText.textContent = "The browser stopped the page before it finished. The last step it"
-            + ` reported was: ${abandoned}. Try starting again; if it stops at the same place twice, the`
-            + " memory this device gives to a page is not enough for what was being done there.";
-        }
+        return;
       }
-      catch (error) {
-        // No usable store just means the game has not been imported on this device yet.
-        console.warn(error);
-      }
+
+      playButton.hidden = false;
+      forgetButton.hidden = false;
+      gateStatus.textContent = `${paths.length} game files stored on this device`;
+
+      reportAbandonedSession(true);
     })();
 
   </script>

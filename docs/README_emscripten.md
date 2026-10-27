@@ -157,6 +157,15 @@ There are four ways of handing them over:
 
 `data/HEROES2.AGG` is required; everything else is optional.
 
+Every stored file holds bytes of its own. This matters on iOS, where a record which points into a file the
+player picked rather than holding its bytes costs a copy of that whole file on the first read of anything
+in it: a build which stored its ZIP entries that way charged a phone with a hundred copies of the archive.
+Files left by that build cannot be repaired - once the page which stored them is gone, the browser hands back
+the beginning of the archive instead of the window that was cut from it, and the offset is recorded nowhere -
+so the launcher looks at four bytes of each file once, on the first start after an update, and refuses to
+start from them, naming what has to be forgotten and imported again. Trying to read such a record whole is
+also how a phone dies outright, which is why the store is only inspected and never rewritten in place.
+
 Saved games, settings and downloaded content live in a second store that survives an update of the build
 and is only cleared by the Forget button, which removes the imported game files and nothing else.
 
@@ -188,6 +197,10 @@ files offline and is not fetched from the network on every launch.
 Things worth knowing about iOS:
 
 * The first start needs a download of a few megabytes; every later start is served from local storage.
+* The build it is running is printed at the bottom of the start screen, because a phone which keeps failing
+  looks identical whether a fix has reached it or it is still playing the cached build of a week ago. When
+  the worker finds a newer build while a page is open, that page offers to reload rather than go on with a
+  launcher and an engine from different builds.
 * The memory of a web page is capped, and the build limits its linear memory to 1 GiB for that reason.
   What a start brings into it is the aggregates, the maps and the music -- about 115 MB -- plus the film
   being watched; see the section above.
@@ -199,8 +212,14 @@ Things worth knowing about iOS:
 * A phone may reclaim the memory of a backgrounded web app. Imported files and saved games are on disk and
   survive that; an interrupted battle does not.
 * Where a device really cannot hold what was imported, the launcher writes a journal of its start-up into
-  local storage. Reopening the page after a kill names the last step the phone reached, which is the
-  closest thing to a crash report obtainable here.
+  local storage. Reopening the page after a kill names the last step the phone reached and the build which
+  reached it, which is the closest thing to a crash report obtainable here. It is shown even when nothing was
+  stored at all, which is the shape of a phone killed part-way through its first import: without it the page
+  simply asks for the files again, and the player has no way to learn that the attempt died for want of
+  memory rather than for want of the right files.
+* Whether the bytes of a session survive being killed outright is up to the browser. The journal is written
+  synchronously, and WebKit has it on disk; a browser which batches such writes can lose the last few steps.
+  This only ever costs detail from an account of a death, never the game itself.
 
 ### The Size Of The Game Area
 

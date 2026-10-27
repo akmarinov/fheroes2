@@ -62,6 +62,17 @@ self.addEventListener("activate", event => {
     }
 
     await self.clients.claim();
+
+    /*
+     * A page which is already open is running the script of the build it was loaded with: taking over its
+     * fetches does not replace the code in it. Telling it which version now answers its requests is what
+     * lets that page offer a reload rather than carry on with an engine and a launcher which no longer
+     * match - the pairing the launcher also guards against for the animation files. A page of the same
+     * version ignores the message, so the first install of a build stays silent.
+     */
+    for (const client of await self.clients.matchAll({ type: "window" })) {
+      client.postMessage({ type: "updated", version: VERSION });
+    }
   })());
 });
 
